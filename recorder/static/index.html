@@ -97,8 +97,10 @@ ul.recs li.sel button.row { background: var(--panel-2); box-shadow: inset 3px 0 
 .state.processing { color: var(--warn); border-color: #5a4a12; }
 .state.failed { color: #ff9b9b; border-color: #5a2626; }
 .state.recording { color: #ff9b9b; border-color: var(--rec); }
-video { width: 100%; display: block; background: #000; border-radius: 4px; }
-dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 12px 0 0; font-size: 0.84rem; }
+.reviewgrid { display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 780px) { .reviewgrid { grid-template-columns: 1fr; } }
+video { width: 100%; max-width: 520px; display: block; background: #000; border-radius: 4px; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 0.84rem; }
 dt { color: var(--ink-3); }
 dd { margin: 0; font-family: var(--mono); }
 .rowbtns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
@@ -152,12 +154,14 @@ a.dl:hover { border-color: var(--ink-3); }
 
   <section class="panel" id="detailPanel" style="margin-top:16px" hidden>
     <h2>review</h2>
-    <div class="pad">
+    <div class="pad reviewgrid">
       <video id="player" controls preload="metadata"></video>
-      <dl id="detail"></dl>
-      <div class="rowbtns">
-        <a class="dl" id="dlRaw" href="#">RAW をダウンロード</a>
-        <button id="btnDel">削除</button>
+      <div>
+        <dl id="detail"></dl>
+        <div class="rowbtns">
+          <a class="dl" id="dlRaw" href="#">RAW をダウンロード</a>
+          <button id="btnDel">削除</button>
+        </div>
       </div>
     </div>
   </section>
@@ -256,11 +260,21 @@ $("btnRec").addEventListener("click", async () => {
   }
 });
 
+let lastItems = [];
+
 async function refresh() {
   let items;
   try {
     items = await (await fetch("/api/recordings")).json();
   } catch (e) { return; }
+  lastItems = items;
+
+  // 初回だけ、URL ハッシュで指定された録画を開く
+  if (selected === null && location.hash) {
+    const want = decodeURIComponent(location.hash.slice(1));
+    const hit = items.find((r) => r.id === want);
+    if (hit) select(hit, false);
+  }
 
   const ul = $("list");
   ul.textContent = "";
@@ -330,8 +344,11 @@ async function refresh() {
   }
 }
 
-function select(it) {
+function select(it, updateHash = true) {
   selected = it.id;
+  if (updateHash && location.hash.slice(1) !== it.id) {
+    history.replaceState(null, "", "#" + encodeURIComponent(it.id));
+  }
   $("detailPanel").hidden = false;
   const v = $("player");
   if (it.preview) {
@@ -375,6 +392,7 @@ $("btnDel").addEventListener("click", async () => {
   if (!confirm(`${selected} を削除します。RAW も消えます。`)) return;
   await fetch(`/api/recordings/${encodeURIComponent(selected)}`, { method: "DELETE" });
   selected = null;
+  history.replaceState(null, "", location.pathname);
   $("detailPanel").hidden = true;
   refresh();
 });

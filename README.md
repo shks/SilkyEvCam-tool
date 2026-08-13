@@ -787,6 +787,14 @@ python -m recorder.app          # http://127.0.0.1:8000
 レビューする Web アプリ。**カメラは排他アクセスなので、起動中は
 `metavision_viewer` / `motion_viewer` と同時に使えない。**
 
+![録画システムの画面](docs/recorder-ui.png)
+
+上段左がライブプレビュー（MJPEG）、右が録画一覧。
+一覧の各行には長さ・イベント数・RAW サイズ・MP4 サイズを並べている
+（サイズだけだとタイムスタンプのオーバーヘッドと実際の情報量が区別できないため）。
+行をクリックすると下段の review が開き、MP4 再生とメタデータ、
+RAW ダウンロードができる。URL の `#<録画ID>` で直接その録画を開ける。
+
 - `recorder/camera.py` — デバイスを 1 スレッドで保持。ストリームは常に流し、
   録画は `I_EventsStream.log_raw_data()` の ON/OFF だけで切り替える
 - `recorder/postproc.py` — 停止後にメタデータ抽出と MP4 プレビュー生成
