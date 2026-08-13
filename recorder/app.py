@@ -62,15 +62,40 @@ def static_file(name: str):
     return FileResponse(p)
 
 
+def estimate_write_rate(event_rate: float) -> float:
+    """イベントレートから RAW の書き込みレート [B/s] を見積もる。
+
+    EVT3 のワード内訳を実測して組み立てた式（README「イベントカメラのデータ形式」）:
+
+      EVT_TIME_HIGH  イベントの有無に関わらず約 62 kHz で出続ける → 125 kB/s の下限
+      EVT_ADDR_X     1 イベント 1 ワード
+      EVT_TIME_LOW   イベントのある us ごとに 1 ワード（1 MHz で頭打ち）
+      EVT_ADDR_Y     (us, 行) の組ごとに 1 ワード。密になるほど 1 行に相乗りする
+
+    実測との突き合わせ: 29.7 kev/s → 303 kB/s（実測 308）、
+    6.15 Mev/s → 20.4 MB/s（実測 20.4）。
+
+    固定値で代用すると桁を間違える。実際、非録画時に 310 kB/s 決め打ちにしていた
+    ときは「残り 514 時間」と出ていたが、そのときの実レートでは約 10 時間だった。
+    """
+    ev = max(0.0, event_rate)
+    # 密なシーンでは ADDR_Y 1 つあたり平均 2.07 イベントが相乗りする（実測）
+    share = 1.0 + 1.07 * min(1.0, ev / 6.0e6)
+    addr_x = 2.0 * ev
+    time_low = 2.0 * min(ev, 1.0e6)
+    addr_y = 2.0 * ev / share
+    return 125_000.0 + addr_x + time_low + addr_y
+
+
 @app.get("/api/status")
 def status() -> dict:
     s = worker.status()
     usage = shutil.disk_usage(RECORDINGS)
     out = vars(s).copy()
     out["disk_free_bytes"] = usage.free
-    # 現在の書き込みレートで残り何時間録れるか。
-    # 静止シーンでも 0.31 MB/s 出るので、この見積もりは常に意味がある。
-    rate = s.write_rate if s.recording and s.write_rate > 0 else 310_000
+    # 録画中は実測値、そうでなければ現在のイベントレートからの見積もり。
+    rate = s.write_rate if s.recording and s.write_rate > 0 else estimate_write_rate(s.event_rate)
+    out["estimated_write_rate"] = rate
     out["disk_hours_left"] = usage.free / rate / 3600
     return out
 

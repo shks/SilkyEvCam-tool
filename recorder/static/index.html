@@ -214,9 +214,12 @@ async function tick() {
   btn.className = recording ? "stop" : "rec";
   $("note").disabled = recording;
 
-  // 静止シーンでも 0.31 MB/s 出るので、残り時間は常に出しておく
+  // イベントレートによって書き込みレートは 100 倍以上変わるので、
+  // 見積もりの根拠になっているレートも一緒に出す
+  const est = (s.estimated_write_rate / 1e6).toFixed(2);
+  const basis = recording ? "実測" : "現在のイベントレートからの推定";
   $("disk").textContent =
-    `空き ${fmtBytes(s.disk_free_bytes)} — 現在のレートで約 ${s.disk_hours_left.toFixed(1)} 時間`;
+    `空き ${fmtBytes(s.disk_free_bytes)} — ${est} MB/s（${basis}）で約 ${s.disk_hours_left.toFixed(1)} 時間`;
 }
 
 $("btnRec").addEventListener("click", async () => {
