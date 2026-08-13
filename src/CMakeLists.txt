@@ -10,16 +10,17 @@ endif()
 
 # OpenEB はローカルビルドツリーを使う（system install していない）。
 # scripts/build_tools.sh がこの 2 つを渡す。
-find_package(MetavisionSDK COMPONENTS base core stream REQUIRED)
+find_package(MetavisionSDK COMPONENTS base core stream ui REQUIRED)
 find_package(MetavisionHAL REQUIRED)
 
-foreach(tool latency_probe trigger_probe motion_probe)
+foreach(tool latency_probe trigger_probe motion_probe motion_viewer)
     add_executable(${tool} ${tool}.cpp)
     target_link_libraries(${tool}
         PRIVATE
             MetavisionSDK::base
             MetavisionSDK::core
             MetavisionSDK::stream
+            MetavisionSDK::ui
             Metavision::HAL
     )
 endforeach()

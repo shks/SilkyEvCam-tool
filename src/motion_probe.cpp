@@ -369,9 +369,9 @@ int main(int argc, char **argv) {
         if (!quiet) {
             for (; printed < have; ++printed) {
                 const Detection &d = dets[printed];
-                std::printf("DETECT t_sensor=%10ld us  cell=(%3u,%3u)  px=(%3u,%3u)  compute=%4ld us\n",
-                            static_cast<long>(d.t_event), d.cx, d.cy, d.x, d.y,
-                            static_cast<long>(d.h_detect - d.h_cb));
+                std::printf("DETECT t_host=%8.3f s  t_sensor=%10ld us  cell=(%3u,%3u)  px=(%3u,%3u)  compute=%4ld us\n",
+                            static_cast<double>(d.h_detect - t_start) / 1e6, static_cast<long>(d.t_event), d.cx,
+                            d.cy, d.x, d.y, static_cast<long>(d.h_detect - d.h_cb));
             }
             std::fflush(stdout);
         }
