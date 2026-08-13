@@ -324,11 +324,64 @@ TriggerIn には **LOOPBACK チャネル**がある（`get_available_channels()`
 Δ = `t_cd(発光)` − `t_trigger(loopback)` を出す。**両方センサクロックなので
 オフセット未知の問題が発生しない。**
 
+### trigger_out の端子（仕様書で確定）
+
+出典: [SilkyEvCam-USB_Spec_Rev102.pdf](https://www.centuryarks.com/images/product/sensor/silkyevcam/SilkyEvCam-USB_Spec_Rev102.pdf) P6 Table 4
+（`vendor/docs/` にも保存。gitignore 対象）
+
+USB Type-C とは別に **IX Series コネクタ（HIROSE **IX80G-B-10P**）** が背面にある。
+嵌合プラグは `IX30G-B-10S-CV(7.0)` または `IX31G-B-10S-CV(7.0)`。
+**標準付属品は USB3.0 Type-C ケーブルのみで、trigger ケーブルは付属しない。**
+
+| Pin | Signal | Pin | Signal |
+|---|---|---|---|
+| 1 | **TRIGGER_OUT / SYNC_OUT_P (+3.3V)** | 6 | TRIG_IN_N — opto-coupled |
+| 2 | **SYNC_OUT_N** | 7 | No use |
+| 3 | SYNC_IN_P — opto-coupled | 8 | No use |
+| 4 | SYNC_IN_N — opto-coupled | 9 | No use |
+| 5 | TRIG_IN_P — opto-coupled | 10 | No use |
+
+master 時は **pin 1 & 2** に出力が出る。用途は 2 択:
+
+- `TRIGGER_OUT`: 周期・デューティがプログラム可能なパルス ← **`I_TriggerOut` で叩いているのはこれ**
+- `EXT_SYNC_CLK_OUT`: 1 MHz 同期クロック
+
+slave 時は pin 3 & 4 に 1 MHz クロック、pin 5 & 6 に `MAIN_TRIGGER_IN` を受ける。
+
+**注意 1: TRIG_IN 側はフォトカプラ入力。** 他機材と同期させる用途では
+フォトカプラの伝搬遅延（素子次第で 1〜10 us 以上）が乗る。
+今回使っている **LOOPBACK チャネルは内部経路なのでフォトカプラを通らない**。
+
+**注意 2: pin 1 は 3.3V の P/N ペア。** LED を直接ドライブできる電流は期待できないので
+MOSFET かトランジスタでバッファする。P/N が LVDS なのか 3.3V CMOS + 相補出力なのかは
+仕様書に明記が無いため、オシロで確認するのが確実。
+
 必要なもの:
 
-- SilkyEvCam の trigger 端子ケーブルとピンアサイン・電圧仕様（CenturyArks に要確認）
-- LED + 電流制限抵抗（trigger_out の駆動能力が足りなければトランジスタ）
+- HIROSE の嵌合プラグ `IX30G-B-10S-CV(7.0)` / `IX31G-B-10S-CV(7.0)`
+  （手組しにくいので CenturyArks から完成ケーブルを買う方が現実的）
+- MOSFET / トランジスタ + LED + 電流制限抵抗
 - LED をセンサに向ける
+
+### センサ自体のレイテンシは仕様書に載っている
+
+同 PDF P5 Table 1 より、センサ（PPS3MVCD / PROPHESEE）の
+
+> **Typical Latency 200us**
+> Maximum readout throughput 50Mevents/s
+
+つまり未知定数 C のうち支配項は **約 200 us** とメーカー公称値がある。
+4.00 ms の配送グリッドに対して **5% 程度**にすぎない。
+
+したがって絶対レイテンシの内訳はほぼこう見積もれる:
+
+```
+絶対レイテンシ ≒ 200 us (センサ)  +  0〜4000 us (配送グリッド待ち)  +  小 (USB 転送 + デコード)
+             ≒ 平均 2.2 ms / 最悪 4.3 ms
+```
+
+**Step 2 の LED 測定は「200 us の検証」という位置づけに下がる。**
+数 ms 目標の判断には既に十分な材料が揃っている。
 
 ### なぜ Raspberry Pi を使わないか
 
