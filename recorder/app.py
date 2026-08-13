@@ -158,6 +158,9 @@ def recordings() -> list[dict]:
         row = vars(meta).copy()
         raw = d / "events.raw"
         row["raw_bytes"] = raw.stat().st_size if raw.exists() else row.get("raw_bytes")
+        # MP4 は閲覧用の派生物なので、RAW と並べて一覧に出せるようサイズも返す
+        mp4 = d / "preview.mp4"
+        row["preview_bytes"] = mp4.stat().st_size if mp4.exists() else None
         items.append(row)
     return items
 

@@ -78,8 +78,16 @@ ul.recs { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow-y
 ul.recs li { border-bottom: 1px solid var(--line); }
 ul.recs button.row {
   width: 100%; text-align: left; background: none; border: 0; border-radius: 0;
-  padding: 10px 14px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  padding: 10px 14px; display: flex; flex-direction: column; gap: 3px;
 }
+.rhead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; width: 100%; }
+.rnote { font-size: 0.8rem; color: var(--ink-2); }
+.rfacts {
+  font-family: var(--mono); font-size: 0.74rem; color: var(--ink-3);
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline;
+}
+.rfacts .fk { color: var(--ink-3); opacity: 0.7; }
+.rfacts .sep { opacity: 0.4; }
 ul.recs button.row:hover { background: var(--panel-2); }
 ul.recs li.sel button.row { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
 .rid { font-family: var(--mono); font-size: 0.84rem; }
@@ -165,6 +173,13 @@ const fmtBytes = (b) => {
   if (b < 1e6) return (b / 1e3).toFixed(0) + " kB";
   if (b < 1e9) return (b / 1e6).toFixed(1) + " MB";
   return (b / 1e9).toFixed(2) + " GB";
+};
+// イベント数は桁が大きく振れる（数十万〜数千万）。一覧では概数、詳細では実数を出す。
+const fmtEvents = (n) => {
+  if (n == null) return "–";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + " Mev";
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + " kev";
+  return String(n) + " ev";
 };
 const fmtDur = (s) => {
   if (s == null) return "–";
@@ -262,29 +277,53 @@ async function refresh() {
     const b = document.createElement("button");
     b.className = "row";
 
-    const left = document.createElement("span");
+    const head = document.createElement("div");
+    head.className = "rhead";
     const rid = document.createElement("span");
     rid.className = "rid";
     rid.textContent = it.id;                          // 名前はサーバ生成だが textContent で入れる
-    left.appendChild(rid);
-    if (it.note) {
-      const n = document.createElement("div");
-      n.className = "rmeta";
-      n.textContent = it.note;
-      left.appendChild(n);
-    }
-
-    const right = document.createElement("span");
-    right.className = "rmeta";
     const st = document.createElement("span");
     st.className = "state " + (it.state || "");
     st.textContent = it.state || "?";
-    right.appendChild(st);
-    right.appendChild(document.createTextNode(
-      "  " + fmtDur(it.duration_s) + "  " + fmtBytes(it.raw_bytes)));
+    head.appendChild(rid);
+    head.appendChild(st);
+    b.appendChild(head);
 
-    b.appendChild(left);
-    b.appendChild(right);
+    if (it.note) {
+      const n = document.createElement("div");
+      n.className = "rnote";
+      n.textContent = it.note;
+      b.appendChild(n);
+    }
+
+    // 長さ・イベント数・RAW・MP4。サイズだけだとタイムスタンプの
+    // オーバーヘッドと情報量が混ざるので、イベント数を並べて出す。
+    const facts = document.createElement("div");
+    facts.className = "rfacts";
+    const parts = [
+      ["", fmtDur(it.duration_s)],
+      ["", fmtEvents(it.events)],
+      ["RAW", fmtBytes(it.raw_bytes)],
+      ["MP4", it.preview_bytes != null ? fmtBytes(it.preview_bytes) : "–"],
+    ];
+    parts.forEach(([label, value], i) => {
+      if (i) {
+        const sep = document.createElement("span");
+        sep.className = "sep";
+        sep.textContent = "·";
+        facts.appendChild(sep);
+      }
+      if (label) {
+        const k = document.createElement("span");
+        k.className = "fk";
+        k.textContent = label;
+        facts.appendChild(k);
+      }
+      const v = document.createElement("span");
+      v.textContent = value;
+      facts.appendChild(v);
+    });
+    b.appendChild(facts);
     b.addEventListener("click", () => select(it));
     li.appendChild(b);
     ul.appendChild(li);
@@ -317,6 +356,8 @@ function select(it) {
     ["エンコード", it.encoding || "–"],
     ["センサ", it.generation ? `Gen ${it.generation}  serial ${it.serial}` : "–"],
     ["RAW サイズ", fmtBytes(it.raw_bytes)],
+    ["MP4 サイズ", it.preview_bytes != null ? fmtBytes(it.preview_bytes) : "–"],
+    ["バイト/イベント", (it.raw_bytes && it.events) ? (it.raw_bytes / it.events).toFixed(2) : "–"],
   ];
   for (const [k, val] of rows) {
     const dt = document.createElement("dt");
