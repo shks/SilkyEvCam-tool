@@ -863,8 +863,97 @@ stdout だけ読むと黙って全項目 null になる（実際にそうなっ�
 OpenEB の `setup_env.sh` が未設定の `PATH` 系変数を参照するため。
 `${VAR:-}` で受けるように修正済み。
 
+## Raspberry Pi で動くかの技術検証
+
+**結論: Pi 5 なら現実的。ただし作業が 3 つ要る。** 性能は問題にならず、
+障害はビルドと 1 箇所の実装上の無駄。
+
+### ① プラグインの aarch64 ビルド（必須・最大の作業）
+
+配布されている `libsilky_common_plugin.so` は **x86-64 専用**（`file` で確認済み、
+zip に ARM バイナリは無い）。このままでは Pi でカメラを開けない。
+
+ただし **CenturyArks はプラグインのソースを提供している**
+（[FAQ](https://centuryarks.com/en/faq/silkyevcams-plugin-source-for-metavision-openeb/) /
+[申込フォーム](https://centuryarks.com/en/download-form/)）。
+FAQ には Jetson / Raspberry Pi といった ARM 環境への言及もあり、
+`OPENBLAS_CORETYPE=ARMV8` を設定せよという注意書きまである。
+ビルド手順は「OpenEB のソースツリーに該当ファイルを上書きコピーして一緒にビルド」。
+
+→ **フォームからソースを請求し、aarch64 で通るか確かめるのが最初の一歩。**
+ここが唯一の「やってみないと分からない」部分。
+
+### ② OpenEB の ARM ビルド
+
+公式には **amd64 のみサポート**。ドキュメントに
+"Compilation on other platforms (alternate Linux distributions, different versions
+of Ubuntu, ARM processor architecture etc.) was not tested" と明記されている。
+
+一方で Prophesee は 2025 年 8 月に **GenX320 Starter Kit for Raspberry Pi 5** を出しており、
+そこでは OpenEB が動いている。つまり「未テスト」であって「不可能」ではない。
+
+なお販売代理店の記事に「Metavision 5 SDK は Pi 5 では CPU 不足で動かないので
+Metavision 4 OpenEB を使え」という記述があるが、**Prophesee 自身のページには
+この記述が無く、下の実測とも整合しない**。重いのは有償 SDK 5 の ML/CV モジュールで、
+OpenEB のコアではないと思われる。もしこれが本当なら、プラグインも 4.x 系
+（CenturyArks が v4.6.2 等を配布済み）に合わせてバージョン固定を変える必要がある。
+
+### ③ ビジーウェイトの解消（1 コア分の無駄）
+
+**これが実装上いちばん効く。** 消費ループの CPU コストを実測した:
+
+| 方式 | CPU/秒 |
+|---|---|
+| `EventsIterator`（現行の recorder。デコードあり） | **1.01** |
+| HAL の `wait_next_buffer` + `get_latest_raw_data`（録画のみ） | **0.02** |
+
+`EventsIterator` はカメラ待ちの間もビジーで回り続け、**イベントレートに関係なく
+常に 1 コアを焼く**（3.65〜6.30 Mev/s で振っても CPU/秒 は 1.01 で一定、傾きゼロ）。
+20 コアの母艦では気にならないが、**4 コアの Pi では 25% が無駄になる**。
+
+HAL 直の経路はきちんとブロックするので 0.02 コアで済む。
+プレビューが要らない場面（純粋な録画）ではこちらに切り替えられる。
+
+### 性能は問題にならない（実測）
+
+録画済み RAW をオフライン処理して、1 CPU 秒あたりの処理量を測った
+（ライブ計測ではビジーウェイトに埋もれて測れない）。
+Intel Core Ultra 7 265K の 1 コア換算:
+
+| 処理 | Mev/CPU秒 | MB/CPU秒 |
+|---|---|---|
+| デコードのみ | **164.0** | 547.8 |
+| ＋ フレーム生成 | 135.0 | 451.1 |
+| ＋ フレーム生成 ＋ JPEG | **109.3** | 365.2 |
+
+センサの上限が 50 Mev/s なので、**全部入りでも母艦なら 1 コアの半分**。
+実際の負荷（静止 0.03 Mev/s 〜 混雑 6 Mev/s）では 6/109 ≒ **5.5%** にすぎない。
+
+Pi 5 のコアが仮に 10 倍遅いとしても 55% で収まる計算になる。
+
+### その他の制約
+
+| 項目 | 評価 |
+|---|---|
+| USB 帯域 | 実測 20 MB/s（160 Mbps）、センサ上限でも約 800 Mbps。Pi 5 の USB3 で余裕 |
+| ストレージ | **要注意。** 4.4 Mev/s で 16 MB/s の連続書き込み。microSD では厳しいので NVMe HAT か USB SSD |
+| OS | 64bit 必須（Raspberry Pi OS 64bit / Ubuntu arm64） |
+| Python 側 | FastAPI / OpenCV / numpy はいずれも arm64 で問題なし |
+
+### 先にやるべき検証（カメラもプラグインも不要）
+
+**CPU の懸念だけなら、Pi があれば今日確かめられる。**
+録画済みの RAW ファイルを Pi にコピーし、OpenEB を arm64 でビルドして
+同じオフラインベンチを回せばいい。カメラもプラグインも要らないので、
+ソース請求より先にこれで CPU 面を潰せる。
+
+母艦の 109 Mev/s に対して Pi が何 Mev/s 出るかが分かれば、
+「代理店の言う CPU 不足」が本当かどうかも同時に決着する。
+
 ## 未了
 
+- [ ] Raspberry Pi 検証: ①録画済み RAW でオフラインベンチ → ②プラグインソース請求 → ③aarch64 ビルド
+- [ ] recorder のビジーウェイト解消（録画のみのモードで HAL 直の経路を使う）
 - [ ] 録画のスケジューリング（CSV/Web でスケジュール設定 → API を叩く）
 - [ ] `--nnfilter` が本物の動きを通すかの確認（除去率 98〜99% あるため要検証）
 - [ ] Step 2: LED 配線して光→イベントの絶対遅延を測定
