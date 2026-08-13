@@ -19,14 +19,15 @@ fi
 . "${EVCAM_OPENEB_BUILD}/utils/scripts/setup_env.sh"
 
 # CenturyArks SilkyEvCam の HAL プラグインを追加（上書きではなく追記）
-export MV_HAL_PLUGIN_PATH="${MV_HAL_PLUGIN_PATH}:${EVCAM_SILKY_HAL}/plugins"
+export MV_HAL_PLUGIN_PATH="${MV_HAL_PLUGIN_PATH:-}:${EVCAM_SILKY_HAL}/plugins"
 
 # silkyevcam_platform_info / silkyevcam_mask_pixel_util を PATH へ
-export PATH="${EVCAM_SILKY_HAL}/bin:${PATH}"
+export PATH="${EVCAM_SILKY_HAL}/bin:${PATH:-}"
 
 # Silky プラグインは libmetavision_hal.so.5 / libmetavision_sdk_base.so.5 に依存する。
 # ビルドツリーの lib を明示的に見せておく（vendor 製ツール単体実行時の保険）。
-export LD_LIBRARY_PATH="${EVCAM_OPENEB_BUILD}/lib:${LD_LIBRARY_PATH}"
+# ${VAR:-} で受ける。set -u のスクリプトから source されても落ちないようにする
+export LD_LIBRARY_PATH="${EVCAM_OPENEB_BUILD}/lib:${LD_LIBRARY_PATH:-}"
 
 # Python venv（PEP 668 回避のためシステム Python は汚さない）
 if [ -f "${EVCAM_ROOT}/.venv/bin/activate" ]; then

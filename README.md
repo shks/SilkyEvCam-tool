@@ -612,8 +612,83 @@ HUD にイベントレート・検知レート・現在光っているセル数�
 HUD に日本語を渡すと 1 文字ごとに `?` になる（Hershey フォントには字形が無い）。
 `motion_viewer` の HUD 文字列は ASCII に限ること。
 
+## 録画システム（`recorder/`）
+
+```bash
+source env.sh
+python -m recorder.app          # http://127.0.0.1:8000
+```
+
+ライブプレビューを見ながら手動で録画開始・停止し、録った RAW をブラウザで
+レビューする Web アプリ。**カメラは排他アクセスなので、起動中は
+`metavision_viewer` / `motion_viewer` と同時に使えない。**
+
+- `recorder/camera.py` — デバイスを 1 スレッドで保持。ストリームは常に流し、
+  録画は `I_EventsStream.log_raw_data()` の ON/OFF だけで切り替える
+- `recorder/postproc.py` — 停止後にメタデータ抽出と MP4 プレビュー生成
+- `recorder/app.py` — FastAPI。API とページ配信
+- 保存先: `out/recordings/<ISO時刻>/` に `events.raw` / `preview.mp4` / `meta.json`
+
+### スケジューラは未実装（意図的）
+
+まず手動で動くものを優先した。ただし開始・停止は HTTP API に分けてあるので、
+cron なり常駐プロセスなりを **API を叩く側**として後から足せる。UI の作り直しは要らない。
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| GET | `/api/status` | 接続状態・イベントレート・録画中かどうか・残容量 |
+| GET | `/api/preview.mjpg` | ライブプレビュー（MJPEG） |
+| POST | `/api/record/start` | 録画開始（`{"note": "..."}`） |
+| POST | `/api/record/stop` | 停止 → 後処理を非同期で開始 |
+| GET | `/api/recordings` | 一覧（メタデータつき） |
+| GET | `/api/recordings/{id}/preview.mp4` | プレビュー再生 |
+| GET | `/api/recordings/{id}/events.raw` | RAW ダウンロード |
+| DELETE | `/api/recordings/{id}` | 削除 |
+
+### 容量: 静止していてもデータは減らない
+
+これが設計上いちばん効く制約。実測:
+
+| シーン | イベント | RAW レート | 1 時間 | 1 日 |
+|---|---|---|---|---|
+| 静止（既定バイアス） | 28.8 kev/s | 0.31 MB/s | 1.11 GB | **26.5 GB** |
+| 高感度 `bias_pr=1600` | 5.8 Mev/s | 20.2 MB/s | 72.6 GB | 1.74 TB |
+
+静止時で **10.4 バイト/イベント**。EVT3 の公称（約 2 バイト/イベント）の 5 倍ある。
+**EVT3 は一定周期で TIME_HIGH マーカーを吐くため、イベントが少なくても
+ファイルサイズは下がらない。**「何も映っていない時間はほぼタダ」という前提は成り立たない。
+
+UI には常に「現在のレートであと何時間録れるか」を出している。
+
+### 踏んだ罠
+
+**`metavision_file_to_hdf5` が黙って切り捨てる。** 161 MB / 8.25 秒 / 4824 万イベントの
+RAW を変換したら、出てきたのは 1.02 秒 / 468 万イベント（12%）。
+`Wrote HDF5 file` と表示して **終了コード 0**。RAW 側は健全で `EventsIterator` では
+最後まで読める。再現性あり。HDF5 が要る場合は Python の `HDF5EventFileWriter` を使い、
+**変換後に必ずイベント数を突き合わせること**。
+
+なお HDF5 の圧縮率は期待ほどではない（静止 0.62x / 高レート 0.79x）。
+上記の壊れたファイルからは 0.08x に見えるが、それは 12% しか入っていないため。
+
+**`metavision_file_info` は表を stderr に書く。** stdout は空。
+stdout だけ読むと黙って全項目 null になる（実際にそうなった）。
+
+**Python の `Camera` バインディングには `start_recording` も `cd()` も無い。**
+録画は HAL の `I_EventsStream.log_raw_data()` を使う。これは EVT3 無変換で、
+20 MB/s の記録が通ることを確認済み。
+
+**`metavision_file_to_video` は AVI (MJPG) しか吐かず、相対パスで親ディレクトリを誤認する。**
+絶対パスを渡し、ブラウザ用には ffmpeg で H.264 MP4 に詰め替える
+（実測: 8.25 秒の録画が AVI 3.5 MB → MP4 304 KB、変換 0.9 秒）。
+
+**`env.sh` を `set -u` のスクリプトから source すると落ちていた。**
+OpenEB の `setup_env.sh` が未設定の `PATH` 系変数を参照するため。
+`${VAR:-}` で受けるように修正済み。
+
 ## 未了
 
+- [ ] 録画のスケジューリング（CSV/Web でスケジュール設定 → API を叩く）
 - [ ] `--nnfilter` が本物の動きを通すかの確認（除去率 98〜99% あるため要検証）
 - [ ] Step 2: LED 配線して光→イベントの絶対遅延を測定
 - [ ] 高イベントレート下での輻輳時挙動と ERC の効果検証

@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EvCam Recorder</title>
+<style>
+/* 計測機器の操作卓という位置づけなので、ダーク一本に振り切る。
+   イベント画像自体が暗いので、明るい地色だとプレビューが浮いて見えない。
+   単一テーマに決め打つ代わりに、色は全て明示的に塗る。 */
+:root {
+  color-scheme: dark;
+  --bg: #0e1013;
+  --panel: #171a1f;
+  --panel-2: #1e222a;
+  --line: #2a2f38;
+  --ink: #eef1f5;
+  --ink-2: #9aa3b0;
+  --ink-3: #6b7482;
+  --accent: #3987e5;
+  --rec: #d03b3b;
+  --ok: #0ca30c;
+  --warn: #fab219;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.55;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 64px; }
+header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 1.15rem; margin: 0; letter-spacing: -0.01em; }
+.dev { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-3); }
+.grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.panel > h2 {
+  font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-3); font-family: var(--mono); font-weight: 600;
+  margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line);
+}
+.pad { padding: 14px; }
+.view { position: relative; background: #000; aspect-ratio: 4 / 3; display: grid; place-items: center; }
+.view img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.view .off { color: var(--ink-3); font-family: var(--mono); font-size: 0.85rem; }
+.badge {
+  position: absolute; top: 10px; left: 10px; display: none; align-items: center; gap: 7px;
+  background: rgba(0,0,0,0.62); border-radius: 4px; padding: 4px 9px;
+  font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.06em;
+}
+.badge.on { display: flex; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--rec); animation: blink 1.1s steps(1,end) infinite; }
+@keyframes blink { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+.controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+button {
+  font: inherit; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  border-radius: 5px; padding: 9px 18px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--ink-3); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.rec { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 600; }
+button.stop { background: var(--panel-2); border-color: var(--rec); color: #ff9b9b; font-weight: 600; }
+input[type=text] {
+  font: inherit; flex: 1 1 180px; min-width: 0; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 5px; padding: 9px 11px;
+}
+input[type=text]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px; background: var(--line); }
+.stat { background: var(--panel); padding: 11px 14px; }
+.stat .k { font-size: 0.7rem; color: var(--ink-3); }
+.stat .v { font-family: var(--mono); font-size: 1.05rem; }
+.warnbar { color: var(--warn); font-size: 0.82rem; padding: 0 14px 12px; }
+.errbar { color: #ff9b9b; font-size: 0.85rem; padding: 12px 14px; }
+ul.recs { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow-y: auto; }
+ul.recs li { border-bottom: 1px solid var(--line); }
+ul.recs button.row {
+  width: 100%; text-align: left; background: none; border: 0; border-radius: 0;
+  padding: 10px 14px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+}
+ul.recs button.row:hover { background: var(--panel-2); }
+ul.recs li.sel button.row { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+.rid { font-family: var(--mono); font-size: 0.84rem; }
+.rmeta { font-family: var(--mono); font-size: 0.74rem; color: var(--ink-3); white-space: nowrap; }
+.state { font-family: var(--mono); font-size: 0.68rem; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line); }
+.state.ready { color: #7fd47f; border-color: #2c522c; }
+.state.processing { color: var(--warn); border-color: #5a4a12; }
+.state.failed { color: #ff9b9b; border-color: #5a2626; }
+.state.recording { color: #ff9b9b; border-color: var(--rec); }
+video { width: 100%; display: block; background: #000; border-radius: 4px; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 12px 0 0; font-size: 0.84rem; }
+dt { color: var(--ink-3); }
+dd { margin: 0; font-family: var(--mono); }
+.rowbtns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+a.dl { font: inherit; color: var(--ink); text-decoration: none; border: 1px solid var(--line);
+  background: var(--panel-2); border-radius: 5px; padding: 8px 14px; }
+a.dl:hover { border-color: var(--ink-3); }
+.empty { color: var(--ink-3); padding: 20px 14px; font-size: 0.88rem; }
+.note { color: var(--ink-3); font-size: 0.8rem; margin: 10px 14px 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>EvCam Recorder</h1>
+    <span class="dev" id="dev">接続中…</span>
+  </header>
+
+  <div id="err" class="errbar" hidden></div>
+
+  <div class="grid">
+    <div>
+      <section class="panel">
+        <h2>live</h2>
+        <div class="view">
+          <img id="preview" alt="イベントカメラのライブプレビュー" hidden>
+          <span class="off" id="previewOff">no signal</span>
+          <span class="badge" id="badge"><span class="dot"></span><span id="badgeText">REC</span></span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">イベントレート</div><div class="v" id="sRate">–</div></div>
+          <div class="stat"><div class="k">録画時間</div><div class="v" id="sElapsed">–</div></div>
+          <div class="stat"><div class="k">ファイルサイズ</div><div class="v" id="sSize">–</div></div>
+          <div class="stat"><div class="k">書き込み</div><div class="v" id="sWrite">–</div></div>
+        </div>
+        <div class="pad controls">
+          <input type="text" id="note" placeholder="メモ（任意）" autocomplete="off">
+          <button id="btnRec" class="rec" disabled>録画開始</button>
+        </div>
+        <div class="warnbar" id="disk"></div>
+      </section>
+    </div>
+
+    <div>
+      <section class="panel">
+        <h2>recordings</h2>
+        <ul class="recs" id="list"></ul>
+        <p class="note">RAW は EVT3 のまま無損失で保存。MP4 は閲覧用に自動生成します。</p>
+      </section>
+    </div>
+  </div>
+
+  <section class="panel" id="detailPanel" style="margin-top:16px" hidden>
+    <h2>review</h2>
+    <div class="pad">
+      <video id="player" controls preload="metadata"></video>
+      <dl id="detail"></dl>
+      <div class="rowbtns">
+        <a class="dl" id="dlRaw" href="#">RAW をダウンロード</a>
+        <button id="btnDel">削除</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let selected = null;
+let recording = false;
+
+const fmtBytes = (b) => {
+  if (b == null) return "–";
+  if (b < 1e6) return (b / 1e3).toFixed(0) + " kB";
+  if (b < 1e9) return (b / 1e6).toFixed(1) + " MB";
+  return (b / 1e9).toFixed(2) + " GB";
+};
+const fmtDur = (s) => {
+  if (s == null) return "–";
+  const t = Math.floor(s);
+  return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+};
+
+function showError(msg) {
+  const el = $("err");
+  if (!msg) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = msg;              // サーバ由来の文字列。textContent で入れる
+}
+
+async function tick() {
+  let s;
+  try {
+    s = await (await fetch("/api/status")).json();
+  } catch (e) {
+    showError("サーバに接続できません");
+    return;
+  }
+  showError(s.error);
+
+  $("dev").textContent = s.connected
+    ? `serial ${s.serial}  ${s.width}x${s.height}`
+    : "カメラ未接続";
+
+  const img = $("preview");
+  if (s.connected && img.hidden) {
+    img.src = "/api/preview.mjpg";
+    img.hidden = false;
+    $("previewOff").hidden = true;
+  }
+
+  recording = s.recording;
+  $("badge").classList.toggle("on", recording);
+  $("badgeText").textContent = "REC " + fmtDur(s.elapsed_s);
+  $("sRate").textContent = (s.event_rate / 1e3).toFixed(1) + " kev/s";
+  $("sElapsed").textContent = recording ? fmtDur(s.elapsed_s) : "–";
+  $("sSize").textContent = recording ? fmtBytes(s.bytes_written) : "–";
+  $("sWrite").textContent = recording ? (s.write_rate / 1e6).toFixed(2) + " MB/s" : "–";
+
+  const btn = $("btnRec");
+  btn.disabled = !s.connected;
+  btn.textContent = recording ? "録画停止" : "録画開始";
+  btn.className = recording ? "stop" : "rec";
+  $("note").disabled = recording;
+
+  // 静止シーンでも 0.31 MB/s 出るので、残り時間は常に出しておく
+  $("disk").textContent =
+    `空き ${fmtBytes(s.disk_free_bytes)} — 現在のレートで約 ${s.disk_hours_left.toFixed(1)} 時間`;
+}
+
+$("btnRec").addEventListener("click", async () => {
+  $("btnRec").disabled = true;
+  try {
+    if (recording) {
+      await fetch("/api/record/stop", { method: "POST" });
+    } else {
+      await fetch("/api/record/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: $("note").value }),
+      });
+      $("note").value = "";
+    }
+  } finally {
+    await tick();
+    await refresh();
+  }
+});
+
+async function refresh() {
+  let items;
+  try {
+    items = await (await fetch("/api/recordings")).json();
+  } catch (e) { return; }
+
+  const ul = $("list");
+  ul.textContent = "";
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "まだ録画がありません";
+    ul.appendChild(li);
+    return;
+  }
+  for (const it of items) {
+    const li = document.createElement("li");
+    if (it.id === selected) li.className = "sel";
+    const b = document.createElement("button");
+    b.className = "row";
+
+    const left = document.createElement("span");
+    const rid = document.createElement("span");
+    rid.className = "rid";
+    rid.textContent = it.id;                          // 名前はサーバ生成だが textContent で入れる
+    left.appendChild(rid);
+    if (it.note) {
+      const n = document.createElement("div");
+      n.className = "rmeta";
+      n.textContent = it.note;
+      left.appendChild(n);
+    }
+
+    const right = document.createElement("span");
+    right.className = "rmeta";
+    const st = document.createElement("span");
+    st.className = "state " + (it.state || "");
+    st.textContent = it.state || "?";
+    right.appendChild(st);
+    right.appendChild(document.createTextNode(
+      "  " + fmtDur(it.duration_s) + "  " + fmtBytes(it.raw_bytes)));
+
+    b.appendChild(left);
+    b.appendChild(right);
+    b.addEventListener("click", () => select(it));
+    li.appendChild(b);
+    ul.appendChild(li);
+  }
+}
+
+function select(it) {
+  selected = it.id;
+  $("detailPanel").hidden = false;
+  const v = $("player");
+  if (it.preview) {
+    v.src = `/api/recordings/${encodeURIComponent(it.id)}/preview.mp4`;
+    v.hidden = false;
+  } else {
+    v.removeAttribute("src");
+    v.hidden = true;
+  }
+  $("dlRaw").href = `/api/recordings/${encodeURIComponent(it.id)}/events.raw`;
+
+  const dl = $("detail");
+  dl.textContent = "";
+  const rows = [
+    ["ID", it.id],
+    ["状態", it.state + (it.error ? ` — ${it.error}` : "")],
+    ["メモ", it.note || "–"],
+    ["開始", it.started_at || "–"],
+    ["長さ", it.duration_s != null ? it.duration_s.toFixed(3) + " s" : "–"],
+    ["イベント数", it.events != null ? it.events.toLocaleString() : "–"],
+    ["平均レート", it.event_rate != null ? (it.event_rate / 1e3).toFixed(1) + " kev/s" : "–"],
+    ["エンコード", it.encoding || "–"],
+    ["センサ", it.generation ? `Gen ${it.generation}  serial ${it.serial}` : "–"],
+    ["RAW サイズ", fmtBytes(it.raw_bytes)],
+  ];
+  for (const [k, val] of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = k;
+    const dd = document.createElement("dd");
+    dd.textContent = val;
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+  refresh();
+}
+
+$("btnDel").addEventListener("click", async () => {
+  if (!selected) return;
+  if (!confirm(`${selected} を削除します。RAW も消えます。`)) return;
+  await fetch(`/api/recordings/${encodeURIComponent(selected)}`, { method: "DELETE" });
+  selected = null;
+  $("detailPanel").hidden = true;
+  refresh();
+});
+
+tick();
+refresh();
+setInterval(tick, 500);
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
