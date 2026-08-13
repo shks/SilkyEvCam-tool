@@ -52,9 +52,17 @@ int64_t now_us() {
         .count();
 }
 
+// win_start / dead_until を INT64_MIN で初期化してはいけない。
+// センサ時刻 t は正の小さい値なので t - INT64_MIN が符号付きオーバーフローし、
+// 窓のリセット判定 (t - win_start > window_us) が永久に false になる。
+// その結果、各セルの最初の検知だけが「起動以来の全イベントを窓なしで数えた」
+// ものになり、--count を上げるほど誤検知が増えるという逆転が起きた。
+// count == 0 を「未初期化」の印として使い、引き算そのものを避ける。
+constexpr int64_t kLongAgo = -1000000000000000LL; // 引いてもオーバーフローしない過去
+
 struct Cell {
-    int64_t win_start = INT64_MIN;
-    int64_t dead_until = INT64_MIN;
+    int64_t win_start = 0;
+    int64_t dead_until = kLongAgo;
     uint32_t count = 0;
 };
 
@@ -252,11 +260,13 @@ int main(int argc, char **argv) {
     // 照明フリッカでもホットピクセルでもなかった。本物の動きは輪郭に沿って
     // 空間的に相関したイベントを出すので、8 近傍に直近のイベントが無いものを捨てる。
     //
-    // 1 画素あたり int32 のタイムスタンプ。640x480 で 1.2 MB。
+    // 1 画素あたり int64 のタイムスタンプ。640x480 で 2.4 MB。
+    // int32 + INT32_MIN 初期化にすると t - INT32_MIN がオーバーフローし、
+    // 一度も発火していない近傍が「相関あり」と誤判定されてフィルタが素通しになる。
     // 1 イベントあたり 8 回のルックアップで済むので判定コストはほぼ増えない。
-    std::vector<int32_t> last_ts;
+    std::vector<int64_t> last_ts;
     if (nn_us > 0) {
-        last_ts.assign(static_cast<size_t>(width) * static_cast<size_t>(height), INT32_MIN);
+        last_ts.assign(static_cast<size_t>(width) * static_cast<size_t>(height), kLongAgo);
     }
     uint64_t dropped_by_nn = 0;
 
@@ -277,24 +287,24 @@ int main(int argc, char **argv) {
 
         for (const auto *e = begin; e != end; ++e) {
             if (nn_us > 0) {
-                const int32_t t32 = static_cast<int32_t>(e->t);
-                const size_t idx  = static_cast<size_t>(e->y) * static_cast<size_t>(width) + e->x;
+                const int64_t te = e->t;
+                const size_t idx = static_cast<size_t>(e->y) * static_cast<size_t>(width) + e->x;
                 bool correlated   = false;
                 const int x0 = std::max(0, e->x - 1), x1 = std::min(width - 1, e->x + 1);
                 const int y0 = std::max(0, e->y - 1), y1 = std::min(height - 1, e->y + 1);
                 for (int yy = y0; yy <= y1 && !correlated; ++yy) {
-                    const int32_t *row = &last_ts[static_cast<size_t>(yy) * static_cast<size_t>(width)];
+                    const int64_t *row = &last_ts[static_cast<size_t>(yy) * static_cast<size_t>(width)];
                     for (int xx = x0; xx <= x1; ++xx) {
                         if (xx == e->x && yy == e->y) {
                             continue; // 自分自身は相関の根拠にしない
                         }
-                        if (t32 - row[xx] <= nn_us) {
+                        if (te - row[xx] <= nn_us) {
                             correlated = true;
                             break;
                         }
                     }
                 }
-                last_ts[idx] = t32; // 相関の有無に関わらず自分の時刻は残す
+                last_ts[idx] = te; // 相関の有無に関わらず自分の時刻は残す
                 if (!correlated) {
                     ++dropped_by_nn;
                     continue;
@@ -309,7 +319,7 @@ int main(int argc, char **argv) {
             if (t < c.dead_until) {
                 continue;
             }
-            if (t - c.win_start > window_us) {
+            if (c.count == 0 || t - c.win_start > window_us) {
                 c.win_start = t;
                 c.count     = 0;
             }
