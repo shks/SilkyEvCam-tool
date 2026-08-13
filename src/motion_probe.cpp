@@ -278,7 +278,8 @@ int main(int argc, char **argv) {
     std::atomic<size_t> n_det{0};
 
     // warmup を過ぎるまで検知を記録しない。起動直後は FX3 の溜まりが降ってくるため。
-    int64_t record_from = INT64_MAX;
+    // main スレッドが camera.start() 後に書き、コールバックスレッドが読むので atomic。
+    std::atomic<int64_t> record_from{INT64_MAX};
     std::atomic<uint64_t> total_events{0};
 
     camera.cd().add_callback([&](const Metavision::EventCD *begin, const Metavision::EventCD *end) {
@@ -332,7 +333,7 @@ int main(int argc, char **argv) {
             c.count      = 0;
             c.win_start  = t;
 
-            if (h_cb >= record_from) {
+            if (h_cb >= record_from.load(std::memory_order_relaxed)) {
                 const size_t i = n_det.load(std::memory_order_relaxed);
                 if (i < kDetCap) {
                     dets[i] = Detection{t,  h_cb, now_us(), static_cast<uint16_t>(ci), static_cast<uint16_t>(cj),
@@ -358,9 +359,10 @@ int main(int argc, char **argv) {
     std::fflush(stdout);
 
     camera.start();
-    const int64_t t_start = now_us();
-    record_from           = t_start + static_cast<int64_t>(warmup_ms * 1000.0);
-    const int64_t t_end   = record_from + static_cast<int64_t>(seconds * 1e6);
+    const int64_t t_start   = now_us();
+    const int64_t rec_start = t_start + static_cast<int64_t>(warmup_ms * 1000.0);
+    record_from.store(rec_start, std::memory_order_relaxed);
+    const int64_t t_end = rec_start + static_cast<int64_t>(seconds * 1e6);
 
     // 検知行の出力はコールバックの外で行う。ホットパスに write を入れない。
     size_t printed = 0;
@@ -381,7 +383,7 @@ int main(int argc, char **argv) {
 
     const size_t n_final = n_det.load(std::memory_order_acquire);
     dets.resize(n_final);
-    const double dur = (now_us() - record_from) / 1e6;
+    const double dur = (now_us() - rec_start) / 1e6;
 
     std::printf("\n=== summary ===\n");
     std::printf("  duration          %.2f s\n", dur);

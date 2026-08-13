@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import re
 import shutil
 from pathlib import Path
 
@@ -38,9 +39,40 @@ class StartBody(BaseModel):
     note: str = ""
 
 
+# 録画 ID は record_start が生成する形式（ISO 時刻）だけを受け付ける。
+# この検証なしで RECORDINGS / rec_id を組み立てると、rec_id=".." のとき
+# pathlib の .parent が字句的に働いて containment チェックを素通りし、
+# DELETE /api/recordings/.. が out/ を丸ごと rmtree できてしまう（再現確認済み）。
+_REC_ID = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$")
+
+
+def _rec_dir(rec_id: str) -> Path:
+    if not _REC_ID.fullmatch(rec_id):
+        raise HTTPException(404)
+    d = RECORDINGS / rec_id
+    if not d.is_dir():
+        raise HTTPException(404)
+    return d
+
+
 @app.on_event("startup")
 def _startup() -> None:
     RECORDINGS.mkdir(parents=True, exist_ok=True)
+    # 前回の異常終了からの回復。録画中・後処理中に落ちると meta が
+    # "recording"/"processing" のまま残り、UI に永久にそう表示され続ける。
+    # events.raw は log_raw_data が逐次書いているので、中断時点までの内容は
+    # 有効なファイルとして読める。改めて後処理にかける。
+    for d in sorted(RECORDINGS.iterdir()):
+        if not d.is_dir():
+            continue
+        meta = postproc.load_meta(d)
+        if meta is None or meta.state not in ("recording", "processing"):
+            continue
+        if meta.state == "recording" and "[中断された録画]" not in meta.note:
+            meta.note = (meta.note + " " if meta.note else "") + "[中断された録画]"
+        meta.state = "processing"
+        meta.error = None
+        postproc.process_async(d, meta)
     worker.start()
 
 
@@ -56,8 +88,11 @@ def index() -> str:
 
 @app.get("/static/{name}")
 def static_file(name: str):
+    # ".." 等を弾く。パス結合前に名前そのものを検証する（_REC_ID と同じ理由）
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name) or name.startswith("."):
+        raise HTTPException(404)
     p = STATIC / name
-    if not p.exists() or p.parent != STATIC:
+    if not p.is_file():
         raise HTTPException(404)
     return FileResponse(p)
 
@@ -130,10 +165,11 @@ def record_start(body: StartBody) -> dict:
 
 @app.post("/api/record/stop")
 def record_stop() -> dict:
-    s = worker.status()
-    rec_id = s.recording_id
+    # 停止対象の ID は end_recording の戻り値から取る。status() から取ると、
+    # 開始要求がまだワーカーに拾われていない窓（〜20ms）で recording_id が
+    # None になり、その開始が誰にも止められなくなる。
     try:
-        worker.end_recording()
+        rec_id = worker.end_recording()
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
     worker.wait_idle()
@@ -167,16 +203,16 @@ def recordings() -> list[dict]:
 
 @app.get("/api/recordings/{rec_id}/preview.mp4")
 def preview_file(rec_id: str):
-    p = RECORDINGS / rec_id / "preview.mp4"
-    if p.parent.parent != RECORDINGS or not p.exists():
+    p = _rec_dir(rec_id) / "preview.mp4"
+    if not p.is_file():
         raise HTTPException(404)
     return FileResponse(p, media_type="video/mp4")
 
 
 @app.get("/api/recordings/{rec_id}/events.raw")
 def raw_file(rec_id: str):
-    p = RECORDINGS / rec_id / "events.raw"
-    if p.parent.parent != RECORDINGS or not p.exists():
+    p = _rec_dir(rec_id) / "events.raw"
+    if not p.is_file():
         raise HTTPException(404)
     return FileResponse(p, media_type="application/octet-stream",
                         filename=f"{rec_id}.raw")
@@ -184,9 +220,7 @@ def raw_file(rec_id: str):
 
 @app.delete("/api/recordings/{rec_id}")
 def delete_recording(rec_id: str) -> dict:
-    d = RECORDINGS / rec_id
-    if d.parent != RECORDINGS or not d.is_dir():
-        raise HTTPException(404)
+    d = _rec_dir(rec_id)
     if worker.status().recording_id == rec_id:
         raise HTTPException(409, "録画中です")
     shutil.rmtree(d)

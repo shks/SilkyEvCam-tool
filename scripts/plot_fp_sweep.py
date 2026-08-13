@@ -12,7 +12,6 @@ import csv
 import html
 import json
 import sys
-from collections import OrderedDict
 
 # ── 検証済みパレット ────────────────────────────────────────────────────────
 # window は順序のあるパラメータなので categorical ではなく ordinal ランプ。

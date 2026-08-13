@@ -226,8 +226,10 @@ int main(int argc, char **argv) {
 
     std::printf("\n=== trigger probe ===\n");
     std::printf("  channel           %s\n", chan.c_str());
-    std::printf("  trigger_out       period %u us, duty %.2f  → エッジ間隔 期待値 %.0f us\n", period, duty,
-                period * duty);
+    // 立ち上がり・立ち下がりの両エッジがタイムスタンプされるので、
+    // エッジ間隔は period*duty と period*(1-duty) の交互になる（duty=0.5 なら等間隔）
+    std::printf("  trigger_out       period %u us, duty %.2f  → エッジ間隔 %.0f/%.0f us の交互\n", period, duty,
+                period * duty, period * (1.0 - duty));
     std::printf("  trigger events    %zu  (%.1f /s)\n", trigs.size(), trigs.size() / seconds);
 
     if (trigs.size() < 10) {

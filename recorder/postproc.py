@@ -40,14 +40,16 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=_TIMEOUT)
 
 
-def probe(raw_path: Path) -> dict:
-    """metavision_file_info の出力から要点を拾う。
+# metavision_file_info の human_readable_time が使う 6 単位
+# （ソース metavision_file_info.cpp:45 で確認: {"d","h","m","s","ms","us"}）
+_UNIT_S = {"d": 86400.0, "h": 3600.0, "m": 60.0, "s": 1.0, "ms": 1e-3, "us": 1e-6}
 
-    注意: このツールは表そのものを **stderr** に書く。stdout は空なので、
-    stdout だけ読むと黙って何も取れない（実際にそれで全項目 null になった）。
+
+def parse_info(out: str) -> dict:
+    """metavision_file_info の出力テキストから要点を拾う。
+
+    probe() から分離してあるのはテストのため（実カメラ無しで検証できる）。
     """
-    r = _run(["metavision_file_info", "-i", str(raw_path)])
-    out = (r.stdout or "") + (r.stderr or "")
     info: dict = {}
 
     def grab(label: str, cast=str):
@@ -62,20 +64,36 @@ def probe(raw_path: Path) -> dict:
     grab("Camera serial")
     grab("Camera generation")
 
-    m = re.search(r"^Duration\s{2,}(.+?)\s*$", out, re.MULTILINE)
-    if m:
-        # "10s 251ms 989us" 形式
-        text = m.group(1)
-        total = 0.0
-        for value, unit in re.findall(r"(\d+)(s|ms|us)", text):
-            total += int(value) * {"s": 1.0, "ms": 1e-3, "us": 1e-6}[unit]
-        info["duration_s"] = round(total, 6)
-
-    m = re.search(r"^CD\s+(\d+)\s", out, re.MULTILINE)
+    # 長さは CD 行の末尾タイムスタンプ [us] から取るのが最も正確。
+    # 行の形式: "CD  <count>  <first_ts>  <last_ts>  <rate>"
+    m = re.search(r"^CD\s+(\d+)\s+(\d+)\s+(\d+)", out, re.MULTILINE)
     if m:
         info["events"] = int(m.group(1))
+        info["duration_s"] = round(int(m.group(3)) / 1e6, 6)
+
+    # フォールバック: Duration 行の人間可読表記（"1m 30s 251ms 989us" 等）。
+    # 単位は s/ms/us だけでなく d/h/m もある。以前は s/ms/us しか拾っておらず、
+    # 1 分以上の録画で分・時が黙って脱落していた（90 秒の録画が 30 秒になる）。
+    # 正規表現の選択肢は長い単位を先に置くこと。"251ms" が 251 分に化ける。
+    if "duration_s" not in info:
+        m = re.search(r"^Duration\s{2,}(.+?)\s*$", out, re.MULTILINE)
+        if m:
+            total = 0.0
+            for value, unit in re.findall(r"(\d+)\s*(us|ms|d|h|m|s)\b", m.group(1)):
+                total += int(value) * _UNIT_S[unit]
+            info["duration_s"] = round(total, 6)
 
     return info
+
+
+def probe(raw_path: Path) -> dict:
+    """metavision_file_info を実行して要点を拾う。
+
+    注意: このツールは表そのものを **stderr** に書く。stdout は空なので、
+    stdout だけ読むと黙って何も取れない（実際にそれで全項目 null になった）。
+    """
+    r = _run(["metavision_file_info", "-i", str(raw_path)])
+    return parse_info((r.stdout or "") + (r.stderr or ""))
 
 
 def make_preview(raw_path: Path, out_dir: Path) -> Path:

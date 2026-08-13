@@ -172,6 +172,13 @@ const $ = (id) => document.getElementById(id);
 let selected = null;
 let recording = false;
 
+// サーバ再起動などで MJPEG ストリームが切れたら img を隠す。
+// 次の tick() が connected を見て張り直す
+$("preview").addEventListener("error", () => {
+  $("preview").hidden = true;
+  $("previewOff").hidden = false;
+});
+
 const fmtBytes = (b) => {
   if (b == null) return "–";
   if (b < 1e6) return (b / 1e3).toFixed(0) + " kB";
@@ -214,7 +221,8 @@ async function tick() {
 
   const img = $("preview");
   if (s.connected && img.hidden) {
-    img.src = "/api/preview.mjpg";
+    // cache-buster を付ける。同じ URL だとブラウザが再接続してくれないことがある
+    img.src = "/api/preview.mjpg?t=" + Date.now();
     img.hidden = false;
     $("previewOff").hidden = true;
   }

@@ -102,11 +102,22 @@ class CameraWorker:
                 raise RuntimeError("カメラに接続されていません")
             self._want_record = rec_id
 
-    def end_recording(self) -> None:
+    def end_recording(self) -> str | None:
+        """録画停止を要求し、対象の録画 ID を返す。
+
+        開始要求がまだワーカーに拾われていない窓（〜20ms）で呼ばれた場合は、
+        その開始自体を取り消す。ここで「録画していません」と例外にすると、
+        409 を返した直後に録画が始まり、以後誰にも止められなくなる。
+        """
         with self._lock:
+            if self._want_record is not None:
+                cancelled = self._want_record
+                self._want_record = None
+                return cancelled
             if not self._status.recording:
                 raise RuntimeError("録画していません")
             self._want_stop = True
+            return self._status.recording_id
 
     def wait_idle(self, timeout: float = 5.0) -> bool:
         """録画が実際に停止しファイルが閉じるまで待つ。"""
