@@ -13,7 +13,7 @@ endif()
 find_package(MetavisionSDK COMPONENTS base core stream REQUIRED)
 find_package(MetavisionHAL REQUIRED)
 
-foreach(tool latency_probe trigger_probe)
+foreach(tool latency_probe trigger_probe motion_probe)
     add_executable(${tool} ${tool}.cpp)
     target_link_libraries(${tool}
         PRIVATE
