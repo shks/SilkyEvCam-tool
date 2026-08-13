@@ -1,0 +1,23 @@
+# OpenEB は tag 5.2.0 を clone して使う（README 参照）
+openeb/
+
+# Python venv
+.venv/
+
+# CenturyArks の proprietary バイナリ。再配布しない。
+# scripts/fetch_plugin.sh で取得する。
+vendor/
+
+# C++ ツールのビルド成果物
+build/
+
+# 記録データ
+out/
+*.raw
+*.hdf5
+*.dat
+
+__pycache__/
+
+# マシンローカルの Claude Code 設定
+.claude/settings.local.json
