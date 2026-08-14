@@ -73,6 +73,7 @@ Ubuntu 24.04 は PEP 668 でシステム Python への pip を拒否するため
 python3 -m venv .venv
 .venv/bin/python -m pip install numpy opencv-python h5py scipy pytest
 .venv/bin/python -m pip install "pybind11==2.13.6"
+.venv/bin/python -m pip install fastapi "uvicorn[standard]"   # recorder/ 用
 ```
 
 **pybind11 は 2.13.6 に固定。** OpenEB 5.2.0 は `find_package(pybind11 2.7)` で 2.x 系を前提にしており、
@@ -399,15 +400,16 @@ MOSFET かトランジスタでバッファする。P/N が LVDS なのか 3.3V 
 **Step 2 の LED 測定は「200 us の検証」という位置づけに下がる。**
 数 ms 目標の判断には既に十分な材料が揃っている。
 
-### なぜ Raspberry Pi を使わないか
+### なぜ Raspberry Pi を（刺激源として）使わないか
 
-1. **プラグインが x86-64 専用。** `file` で確認済み
-   （`ELF 64-bit LSB shared object, x86-64`）。zip に ARM/aarch64 バイナリは無い。
-   CenturyArks が aarch64 版を出していない限り、**Pi ではカメラ自体が動かない**
-2. **Pi を別マシンの刺激源にすると悪化する。** Pi と host のクロックを 4 ms より
+（注: 「Pi ではカメラが動かない」と当初書いていたが、これは後に解決した —
+「Raspberry Pi で動かす（まとめ）」参照。ここでの論点は LED 刺激源としての Pi で、
+その結論は今も変わらない。）
+
+1. **Pi を別マシンの刺激源にすると悪化する。** Pi と host のクロックを 4 ms より
    十分細かく同期する必要があるが、chrony/NTP は ms オーダー＝測りたい量と同じ桁。
    ハードウェアタイムスタンプ付き PTP なら足りるが、労力に見合わない
-3. **そもそも不要。** カメラが trigger_out + LOOPBACK を持っているので単一
+2. **そもそも不要。** カメラが trigger_out + LOOPBACK を持っているので単一
    クロックドメインで完結する
 
 ## 動き検知（`src/motion_probe.cpp`）
@@ -878,6 +880,99 @@ stdout だけ読むと黙って全項目 null になる（実際にそうなっ�
 **`env.sh` を `set -u` のスクリプトから source すると落ちていた。**
 OpenEB の `setup_env.sh` が未設定の `PATH` 系変数を参照するため。
 `${VAR:-}` で受けるように修正済み。
+
+## Raspberry Pi で動かす（まとめ）
+
+**結論: Raspberry Pi 5 で SilkyEvCam が完全に動く。CenturyArks のプラグインは使わない。**
+録画サーバ（`recorder/`）もブラウザ UI 込みで動作確認済み。詳細な経緯と実測は次章
+「Raspberry Pi で動くかの技術検証」の各節にあるので、ここでは何をしたかだけを整理する。
+
+### 何が問題で、何をしたか
+
+障害は 1 つだけだった。**CenturyArks の HAL プラグイン（`libsilky_common_plugin.so`）が
+x86-64 バイナリでしか配布されていない**。Prophesee も CenturyArks も ARM 向けの
+バイナリは一切出しておらず（全バージョン確認済み）、公式の解は「ソースを請求して
+自分でビルドせよ」だった。ソース請求には NDA 相当の条件（社内含む第三者提供禁止）が付く。
+
+やったことは 3 つ:
+
+1. **OpenEB 5.2.0 を aarch64 でビルドした** — ソース変更ゼロ、約 7 分で通った。
+   母艦との差は configure から CUDA を外すだけ（`scripts/build_openeb.sh` が自動判別）。
+   公式には「ARM は未テスト」だが、実際には何の問題もない。
+
+2. **CenturyArks プラグインが不要なことを突き止めた** — OpenEB のソースを読むと、
+   HAL プラグインの USB ID リストが既定で空なのは「プラグイン同士が同じボードを
+   取り合わないための調停」であり、SilkyEvCam のセンサ世代 Gen3.1 の制御コードは
+   OpenEB に完全実装されていた。カメラの USB ディスクリプタを読むと Prophesee の
+   Treuzell プロトコルの条件をすべて満たしていたので、Prophesee 純正プラグインに
+   USB ID を登録する **1 行パッチ**で開けた:
+
+   ```cpp
+   tz_cam_discovery->add_usb_id(0x31f7, 0x0002, 0x19);   // CenturyArks SilkyEvCam
+   ```
+
+   これで**ソース請求そのものが不要になった**。NDA も納期も消え、依存は Apache-2.0 の
+   OpenEB だけになった。
+
+3. **母艦の実測値と突き合わせて検証した** — バイアス既定値 7 個が完全一致、
+   配送グリッド 4.00 ms が一致、録画データに欠落なし。性能は母艦の約 9 倍遅だが
+   実負荷では 1 コアの半分以下に収まる。
+
+### Pi での新規セットアップ手順（再現用）
+
+```bash
+# 1. 依存（要 root）
+sudo apt-get install -y cmake libboost-all-dev libusb-1.0-0-dev \
+  libprotobuf-dev protobuf-compiler libhdf5-dev libglew-dev libglfw3-dev \
+  libopencv-dev python3-dev
+
+# 2. venv と Python 依存
+python3 -m venv .venv
+.venv/bin/python -m pip install numpy opencv-python h5py scipy pytest \
+  "pybind11==2.13.6" fastapi "uvicorn[standard]"
+
+# 3. OpenEB 取得とビルド（CUDA の有無は自動判別）
+git clone https://github.com/prophesee-ai/openeb.git --branch 5.2.0
+./scripts/build_openeb.sh
+
+# 4. SilkyEvCam を Prophesee プラグインで開けるようにする（1 行パッチ + 差分ビルド）
+./scripts/probe_silky_usb.sh                    # USB 条件の確認と PID 表示
+./scripts/try_psee_plugin_with_silky.sh         # VGA (PID 0x0002) は引数省略可
+
+# 5. udev ルール（要 root）
+sudo cp scripts/ca_device.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger --action=add
+
+# 6. 動作確認
+source ./env.sh
+metavision_hal_ls                               # Device detected: ... が出れば OK
+python scripts/smoke_test.py
+
+# 録画サーバ（ブラウザから http://<PiのIP>:8000）
+python -m recorder.app --host 0.0.0.0
+```
+
+`vendor/` と `scripts/fetch_plugin.sh`（CenturyArks バイナリの取得）は Pi では使わない。
+
+### 実測サマリ（母艦 = Core Ultra 7 265K + CenturyArks プラグイン経路との比較）
+
+| 項目 | 母艦 | Pi 5 (Prophesee プラグイン経路) |
+|---|---|---|
+| バイアス既定値 7 個 | — | **完全一致**（ISSD 初期化が同等） |
+| 配送グリッド (trigger loopback) | 4.00 ms | **4.00 ms**（lag 分布も同構造） |
+| デコード速度 (dense) | 159.7 Mev/CPU秒 | 18.5 Mev/CPU秒（8.6 倍遅） |
+| 実負荷のコア使用率 (dense 4.4 Mev/s, JPEG 込み) | 4.5% | **41.3%** — 1 コアで足りる |
+| 録画 UI (`recorder/`) | 動作 | **動作**（録画→MP4 生成→ブラウザ配信まで確認） |
+
+### 未解決（次章「残る確認」も参照）
+
+- **ROI が効かない**（設定は受理されるがイベントが絞られない）。API の使い方か、
+  OpenEB の Gen3.1 実装の制約か、母艦との A/B で切り分けが要る
+- **高イベントレート耐性が未測定**（動く被写体が要る）
+- **ライブ時のビジーウェイト**は Pi では実害になる（1 コア丸損）。
+  HAL 直の録画経路への切り替えが事実上必須（次章③）
+- タイムスタンプ単調性に依存する処理は `MV_FLAGS_EVT3_ROBUST_DECODER=1` を付けること
+  （センサの EVT3 プロトコル癖。経路の欠陥ではない。次章の検証節参照）
 
 ## Raspberry Pi で動くかの技術検証
 
