@@ -3,7 +3,7 @@
 # CenturyArks の proprietary プラグイン無しでカメラを開けるようにする。
 #
 # Raspberry Pi 5 (aarch64) + SilkyEvCam VGA (31f7:0002) で動作確認済み。
-# ライブ取得・録画・バイアス・ROI・トリガまで通る（README「①' 解決」参照）。
+# ライブ取得・録画・バイアス・ROI・トリガまで通る（docs/tech-notes.md「①' 解決」参照）。
 #
 # 根拠と限界:
 #   Treuzell の USB ID リストは既定で空で、tz_camera_discovery.h:46 に

@@ -195,7 +195,7 @@ def static_file(name: str):
 def estimate_write_rate(event_rate: float) -> float:
     """イベントレートから RAW の書き込みレート [B/s] を見積もる。
 
-    EVT3 のワード内訳を実測して組み立てた式（README「イベントカメラのデータ形式」）:
+    EVT3 のワード内訳を実測して組み立てた式（docs/tech-notes.md「イベントカメラのデータ形式」）:
 
       EVT_TIME_HIGH  イベントの有無に関わらず約 62 kHz で出続ける → 125 kB/s の下限
       EVT_ADDR_X     1 イベント 1 ワード
@@ -228,6 +228,21 @@ def status() -> dict:
     out["estimated_write_rate"] = rate
     out["disk_hours_left"] = usage.free / rate / 3600
     return out
+
+
+@app.get("/api/preview.jpg")
+def preview_still():
+    """ライブの 1 フレームだけを返す。
+
+    サムネイル取得やスクリプトからの状態確認用。MJPEG ストリーム
+    （/api/preview.mjpg）はヘッドレスブラウザや curl と相性が悪いので、
+    単発で足りる用途はこちらを使う。
+    """
+    jpeg = worker.latest_jpeg(timeout=2.0)
+    if jpeg is None:
+        raise HTTPException(503, "プレビューがまだありません")
+    from fastapi import Response
+    return Response(content=jpeg, media_type="image/jpeg")
 
 
 @app.get("/api/preview.mjpg")

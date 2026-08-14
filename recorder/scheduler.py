@@ -37,7 +37,7 @@ from typing import Callable
 _HM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 # UI で提示する選択肢。API はテスト用に 1〜720 分の任意値も受けるが、
-# 運用はこの中から選ぶこと（README 参照）。
+# 運用はこの中から選ぶこと（README「schedule パネル」参照）。
 CHUNK_CHOICES = (5, 10, 20, 30, 60)
 
 
