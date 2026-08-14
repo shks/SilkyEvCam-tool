@@ -1,153 +1,101 @@
-#!/usr/bin/env python
-"""録画済み RAW をオフライン処理して 1 CPU 秒あたりの処理量を測る.
+#!/usr/bin/env python3
+"""録画済み RAW をオフライン処理して、1 CPU 秒あたりの処理能力を測る.
 
-README「性能は問題にならない（実測）」の表を再現するためのスクリプト。
-母艦（Intel Core Ultra 7 265K）で測った値と Raspberry Pi 5 を比べるのが目的なので、
-**recorder と同じ経路・同じパラメータ**を通すこと自体が要件になっている:
+    source env.sh
+    python scripts/offline_bench.py samples/dense.raw
+    python scripts/offline_bench.py samples/dense.raw --loops 20   # 遅いマシン向け
 
-- EventsIterator を mode="mixed" / delta_t=20000 / n_events=200_000 で回す
-- フレーム生成は PeriodicFrameGenerationAlgorithm(20ms 蓄積, 20 fps)
-- JPEG は cv2.imencode(".jpg", quality=75)
+Raspberry Pi 検証の最初の一歩。カメラもプラグインも不要で、
+OpenEB を arm64 でビルドできればこのスクリプトと samples/ の RAW だけで
+「Pi の CPU で足りるか」が決着する。母艦（Intel Core Ultra 7 265K）の実測:
 
-いずれも recorder/camera.py の値に合わせてある。片方だけ変えると比較にならない。
+    デコードのみ            164.0 Mev/CPU秒
+    + フレーム生成          135.0
+    + フレーム生成 + JPEG   109.3
 
-ライブ計測ではなくオフラインにしているのは、EventsIterator がカメラ待ちの間も
-ビジーで回り続け、CPU 時間がビジーウェイトに埋もれて測れないため（README 参照）。
+センサ上限は 50 Mev/s、実運用の負荷は 0.03〜6 Mev/s。
 
-使い方:
-    python scripts/offline_bench.py out/rec/<id>/events.raw
-    python scripts/offline_bench.py events.raw --json result.json
+注意: ライブカメラでこの測定はできない。EventsIterator の消費ループは
+カメラ待ちの間もビジーで 1 コアを回し続けるため、処理コストが埋もれる。
+（ファイル入力なら待ちが無いので正しく測れる。ファイルに対する
+EventsIterator の作り直しは安全 — double free するのはライブデバイスのみ）
 """
 
-from __future__ import annotations
-
 import argparse
-import json
-import platform
-import sys
+import os
 import time
-from pathlib import Path
 
-# 蓄積時間と表示 fps は recorder/camera.py の既定値と揃える
-ACCUMULATION_US = 20000
-PREVIEW_FPS = 20.0
-JPEG_QUALITY = 75
-
-# EventsIterator の既定値も recorder/camera.py と同じ
-DELTA_T_US = 20000
-N_EVENTS = 200_000
+import cv2
+import metavision_sdk_core as msc
+from metavision_core.event_io import EventsIterator
 
 
-def _iterator(raw_path: Path):
-    from metavision_core.event_io import EventsIterator
-
-    return EventsIterator(input_path=str(raw_path), mode="mixed",
-                          delta_t=DELTA_T_US, n_events=N_EVENTS)
+def cpu_now() -> float:
+    t = os.times()
+    return t[0] + t[1]  # user + system
 
 
-def bench(raw_path: Path, frames: bool, jpeg: bool) -> dict:
-    """RAW を 1 回通し、CPU 時間と処理量を返す。
+def run(path: str, loops: int, do_frame: bool, do_jpeg: bool) -> tuple[int, float, float]:
+    """(処理イベント数, CPU 秒, 1 周のセンサ時間 [s]) を返す。"""
+    n = 0
+    t_last = 0
+    c0 = cpu_now()
+    for _ in range(loops):
+        it = EventsIterator(input_path=path, mode="delta_t", delta_t=20000)
+        h, w = it.get_size()
+        fg = None
+        if do_frame:
+            fg = msc.PeriodicFrameGenerationAlgorithm(w, h, 20000, 20.0)
 
-    frames=False なら EVT3 デコードのみ。frames=True でフレーム生成を足し、
-    さらに jpeg=True で JPEG エンコードまで足す。3 段の差分が各処理のコスト。
-    """
-    import cv2
-    import numpy as np
+            def on_frame(ts, frame):
+                if do_jpeg:
+                    cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
 
-    it = _iterator(raw_path)
-    height, width = it.get_size()
-
-    frame_gen = None
-    n_frames = 0
-    if frames:
-        import metavision_sdk_core as msc
-
-        def on_frame(ts: int, frame: np.ndarray) -> None:
-            nonlocal n_frames
-            n_frames += 1
-            if jpeg:
-                cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-
-        frame_gen = msc.PeriodicFrameGenerationAlgorithm(
-            width, height, ACCUMULATION_US, PREVIEW_FPS)
-        frame_gen.set_output_callback(on_frame)
-
-    n_events = 0
-    # process_time はプロセス全体（全スレッド）の user+sys CPU 時間。
-    # コールバックが別スレッドで回っても取りこぼさない。
-    cpu0, wall0 = time.process_time(), time.perf_counter()
-    for events in it:
-        n = len(events)
-        if not n:
-            continue
-        n_events += n
-        if frame_gen is not None:
-            frame_gen.process_events(events)
-    cpu = time.process_time() - cpu0
-    wall = time.perf_counter() - wall0
-
-    size_mb = raw_path.stat().st_size / 1e6
-    return {
-        "events": n_events,
-        "frames": n_frames,
-        "cpu_s": round(cpu, 3),
-        "wall_s": round(wall, 3),
-        "mev_per_cpu_s": round(n_events / 1e6 / cpu, 1) if cpu > 0 else None,
-        "mb_per_cpu_s": round(size_mb / cpu, 1) if cpu > 0 else None,
-    }
+            fg.set_output_callback(on_frame)
+        for evs in it:
+            n += len(evs)
+            if len(evs):
+                t_last = int(evs["t"][-1])
+                if fg is not None:
+                    fg.process_events(evs)
+        del it
+    return n, cpu_now() - c0, t_last / 1e6
 
 
-STAGES = [
-    ("デコードのみ", dict(frames=False, jpeg=False)),
-    ("＋ フレーム生成", dict(frames=True, jpeg=False)),
-    ("＋ フレーム生成 ＋ JPEG", dict(frames=True, jpeg=True)),
-]
-
-
-def main() -> int:
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("raw", type=Path, help="録画済みの RAW ファイル")
-    ap.add_argument("--repeat", type=int, default=1,
-                    help="各段の試行回数。最良値（最短 CPU 時間）を採る")
-    ap.add_argument("--json", type=Path, help="結果を JSON でも書き出す")
+    ap.add_argument("input", help="RAW ファイル（samples/dense.raw など）")
+    ap.add_argument("--loops", type=int, default=0,
+                    help="繰り返し回数。0 なら CPU 1 秒ぶん以上になるよう自動調整")
     args = ap.parse_args()
 
-    if not args.raw.exists():
-        print(f"ERROR: ファイルがありません: {args.raw}", file=sys.stderr)
-        return 1
-
-    size_mb = args.raw.stat().st_size / 1e6
-    print(f"file    : {args.raw} ({size_mb:.1f} MB)")
-    print(f"machine : {platform.machine()} / {platform.node()}")
+    size = os.path.getsize(args.input)
+    loops = args.loops
+    if loops <= 0:
+        # まず 1 周してかかった CPU 時間から、合計 1 CPU 秒以上になる回数を決める
+        n, cpu, _ = run(args.input, 1, False, False)
+        loops = max(1, int(1.0 / max(cpu, 1e-3)))
+        print(f"1 周 = {n:,} イベント / {cpu:.3f} CPU秒 → {loops} 回繰り返して測定")
+    print(f"入力: {args.input} ({size / 1e6:.1f} MB) x {loops} 周")
     print()
-
-    results = {}
-    for label, kw in STAGES:
-        best = None
-        for _ in range(args.repeat):
-            r = bench(args.raw, **kw)
-            if best is None or r["cpu_s"] < best["cpu_s"]:
-                best = r
-        results[label] = best
-        print(f"{label:<26} {best['mev_per_cpu_s']:>7} Mev/CPU秒  "
-              f"{best['mb_per_cpu_s']:>7} MB/CPU秒  "
-              f"(CPU {best['cpu_s']:.2f}s / wall {best['wall_s']:.2f}s, "
-              f"{best['events']:,} ev, {best['frames']} frames)")
-
-    if args.json:
-        args.json.write_text(json.dumps({
-            "file": str(args.raw),
-            "size_mb": round(size_mb, 3),
-            "machine": platform.machine(),
-            "node": platform.node(),
-            "platform": platform.platform(),
-            "stages": results,
-        }, ensure_ascii=False, indent=2))
-        print(f"\nwrote {args.json}")
-
-    return 0
+    # コストは 2 成分ある:
+    #   - イベント数に比例する成分（デコード）→ Mev/CPU秒 で見る
+    #   - 実時間に比例する成分（フレーム生成と JPEG は 20fps 固定）→ コア使用率で見る
+    # 疎なシーンでは後者が支配的になるので、Mev/CPU秒 だけ見ると誤読する。
+    print(f"{'処理':<26}{'events':>12}{'CPU':>9}{'Mev/CPU秒':>11}{'コア使用率':>10}")
+    for label, do_frame, do_jpeg in (("(1) デコードのみ", False, False),
+                                     ("(2) + フレーム生成", True, False),
+                                     ("(3) + フレーム生成 + JPEG", True, True)):
+        n, cpu, dur = run(args.input, loops, do_frame, do_jpeg)
+        util = cpu / (loops * dur) if dur > 0 else 0.0
+        print(f"{label:<26}{n / 1e6:>11.1f}M{cpu:>9.2f}{n / cpu / 1e6:>11.1f}"
+              f"{util * 100:>9.1f}%")
+    print()
+    print("判定: (3) のコア使用率（実時間でこのデータを流したときの 1 コア占有率）が")
+    print("100% を大きく下回っていれば録画サーバは 1 コアで足りる。")
+    print("疎・密の両方のサンプルで確認すること。")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

@@ -1,6 +1,9 @@
 #!/bin/bash
-# 実験: OpenEB 同梱の Prophesee プラグインに SilkyEvCam の USB ID を登録して、
-# CenturyArks の proprietary プラグイン無しでカメラが開けるか試す。
+# OpenEB 同梱の Prophesee プラグインに SilkyEvCam の USB ID を登録し、
+# CenturyArks の proprietary プラグイン無しでカメラを開けるようにする。
+#
+# Raspberry Pi 5 (aarch64) + SilkyEvCam VGA (31f7:0002) で動作確認済み。
+# ライブ取得・録画・バイアス・ROI・トリガまで通る（README「①' 解決」参照）。
 #
 # 根拠と限界:
 #   Treuzell の USB ID リストは既定で空で、tz_camera_discovery.h:46 に
@@ -9,24 +12,20 @@
 #   SilkyEvCam VGA のセンサ世代 Gen3.1 は "psee,ccam5_fpga" として OpenEB に実装済み
 #   （TzCcam5Gen31: VGA ジオメトリ・バイアス・ROI・トリガ入出力）。
 #
-#   ただし USB 照合を通っても、その先の Treuzell ハンドシェイクや初期化で
-#   CenturyArks 独自の差分に当たって失敗する可能性は残る。あくまで実験。
+#   両社の保証外の使い方であることは変わらない。母艦（CenturyArks プラグイン経由）と
+#   同一シーンで比較し、バイアス既定値やレイテンシに差が無いことは別途確認すること。
 #
 # 使い方:
 #   ./scripts/probe_silky_usb.sh            # まず条件を満たすか確認し、PID を得る
+#   ./scripts/try_psee_plugin_with_silky.sh          # VGA (0x0002) は省略可
 #   ./scripts/try_psee_plugin_with_silky.sh 0x1234 [subclass]
 #
 # 元に戻すには:
 #   git -C openeb checkout -- hal_psee_plugins/src/plugin/psee_universal.cpp
 set -euo pipefail
 
-if [ $# -lt 1 ]; then
-    echo "usage: $0 <PID> [subclass]    例: $0 0x1234" >&2
-    echo "  PID は scripts/probe_silky_usb.sh が表示します" >&2
-    exit 1
-fi
-
-PID="$1"
+# SilkyEvCam VGA の PID。HD 機は別 PID なので probe で確認して渡すこと。
+PID="${1:-0x0002}"
 [ "${PID#0x}" = "${PID}" ] && PID="0x${PID}"
 SUBCLASS="${2:-0x19}"
 VID="0x31f7"   # CenturyArks

@@ -13,9 +13,11 @@ build/
 
 # イベント記録は容量が大きいので入れない。
 # out/ の掃引 CSV とレポート HTML は計測記録として残す。
+# 例外: samples/ の小さな切り出しはベンチ・動作確認用に同梱する。
 *.raw
 *.hdf5
 *.dat
+!samples/*.raw
 
 __pycache__/
 
@@ -25,3 +27,6 @@ __pycache__/
 # 録画データ（RAW は大きいので入れない）
 out/recordings/
 out/rec/
+
+# 再生時に自動生成されるシーク索引
+*.tmp_index
