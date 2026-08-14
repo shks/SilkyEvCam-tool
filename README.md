@@ -7,7 +7,7 @@ Prophesee の **OpenEB**（Metavision SDK の OSS 部分, Apache 2.0）をソー
 ## 使い方
 
 ```bash
-source /home/maeda/projects/EvCam/env.sh
+source ./env.sh                   # リポジトリ直下で
 
 metavision_viewer                 # ライブ表示
 python scripts/smoke_test.py      # 疎通確認（イベント数を出す）
@@ -895,11 +895,84 @@ FAQ には Jetson / Raspberry Pi といった ARM 環境への言及もあり、
 → **フォームからソースを請求し、aarch64 で通るか確かめるのが最初の一歩。**
 ここが唯一の「やってみないと分からない」部分。
 
-### ② OpenEB の ARM ビルド
+配布バイナリを一通り当たったが、**ARM 版はどこにも存在しない**。
+CenturyArks のプラグインは全バージョン（v3.1〜v5.2）が Ubuntu 64bit / Win64 のみ。
+Prophesee 側も Metavision SDK / OpenEB とも prebuilt は amd64 のみで、
+ドキュメントは「amd64 以外（Jetson 等の ARM）はソースからコンパイルせよ」と明記している。
+有償 SDK に切り替えても解決しない。
 
-公式には **amd64 のみサポート**。ドキュメントに
+### ①' 抜け道の可能性: Prophesee プラグインに VID を足すだけで開けないか（未検証）
+
+**CenturyArks のプラグインが不要になるかもしれない筋がある。** 根拠は OpenEB のソース。
+
+`hal_psee_plugins/include/boards/treuzell/tz_camera_discovery.h:46` に意図が書かれている:
+
+```cpp
+// By default, nothing is supported, because we want boards to be ignored by the plugins
+// that can manage it, so that only one open a given board
+std::vector<UsbInterfaceId> known_usb_ids;
+```
+
+USB ID リストが既定で空なのは、**プラグイン同士が同じボードを取り合わないための調停機構**。
+つまりプラグインの差は「どの USB ID を名乗り出るか」に集約される。
+Prophesee が `psee_universal.cpp` で登録しているのは VID `0x03fd` / `0x04b4` / `0x1FC9` の 3 つだけで、
+CenturyArks の `0x31f7` が入っていない。
+
+そして **SilkyEvCam VGA のセンサ世代 Gen3.1 は OpenEB に完全実装済み**
+（`TzCcam5Gen31`、compatible 文字列 `"psee,ccam5_fpga"`、VGA ジオメトリ・バイアス・ROI・トリガ入出力）。
+
+照合条件は `tz_libusb_board_command.cpp:66-84`:
+
+```
+VID/PID 完全一致 && bInterfaceClass == 0xFF && bInterfaceSubClass == 0x19
+&& bInterfaceProtocol == 0 (PSEE_EVK_PROTOCOL) && bulk エンドポイント 3 本 (IN/OUT/IN)
+```
+
+→ **カメラが Treuzell を喋っているなら、`add_usb_id(0x31f7, <PID>, 0x19)` の 1 行で開く可能性がある。**
+通れば NDA も納期も不要で、Apache-2.0 の改変だけで完結し、aarch64 も同時に片付く。
+
+手順は用意してある（カメラ接続待ち）:
+
+```bash
+./scripts/probe_silky_usb.sh                     # root 不要。条件を満たすか判定し PID を出す
+sudo cp scripts/ca_device.rules /etc/udev/rules.d/   # 未導入なら
+./scripts/try_psee_plugin_with_silky.sh 0x<PID>  # 1 行パッチ + プラグインのみ差分ビルド
+source ./env.sh && metavision_hal_ls
+```
+
+**期待値は五分五分より少し悲観的に見ている。** subclass が `0x19` でなければその場で終わりだし、
+USB 照合を通っても Treuzell ハンドシェイクや初期化で CenturyArks 独自の差分に当たりうる。
+ただし判定は数秒で済み、外れても失うものがない。
+
+OpenEB の [Issue #56](https://github.com/prophesee-ai/openeb/issues/56)（プラグインを消すと検出されなくなる）は
+この仮説を否定しない。discovery は USB 照合の時点で止まるので、あの結果は当然である。
+USB ID を追加する実験は公開情報の範囲では行われていない。
+
+### ② OpenEB の ARM ビルド（解決済み: 無改造で通った）
+
+**Raspberry Pi 5 (Debian 13 trixie / aarch64, 4 コア, 8GB) で実際に通した。ソース変更は 1 行も要らなかった。**
+母艦との差は configure 引数から CUDA を外すことだけ（`scripts/build_openeb.sh` が nvcc の有無で自動的に切り替える）。
+
+| 項目 | 結果 |
+|---|---|
+| apt 依存（trixie/arm64） | 全パッケージ解決 |
+| configure | 警告なく通過。Boost / libusb / HDF5 / Protobuf / GLEW / OpenCV すべて検出 |
+| ビルド（-j4） | **約 7 分**、エラー 0・警告 1 |
+| Python バインディング | `metavision_core` / `sdk_core` / `sdk_stream` / `hal` / `sdk_base` すべて import 可（cp313-aarch64） |
+| CLI ツール | `metavision_viewer` / `file_info` / `file_to_video` 生成・起動確認 |
+| `src/` の C++ 4 本 | 無改造でビルド・起動確認 |
+| ビルドツリー | 205 MB（venv 388 MB） |
+
+Python は 3.13.5。OpenEB 5.2.0 は Python 3.13 でも問題なくバインディングを吐いた。
+pybind11 は母艦と同じ 2.13.6 に固定している。
+
+pip の `opencv-python` 5.0 と、OpenEB がリンクする system OpenCV 4.10 が同一プロセスに同居する点は
+懸念だったが、合成イベント 2200 万件でフレーム生成 → `cv2.imencode` まで流して問題なかった。
+
+なお公式ドキュメントは今も **amd64 のみサポート**で、
 "Compilation on other platforms (alternate Linux distributions, different versions
 of Ubuntu, ARM processor architecture etc.) was not tested" と明記されている。
+通ったのは事実だが、保証の外であることは変わらない。
 
 一方で Prophesee は 2025 年 8 月に **GenX320 Starter Kit for Raspberry Pi 5** を出しており、
 そこでは OpenEB が動いている。つまり「未テスト」であって「不可能」ではない。
@@ -930,6 +1003,11 @@ HAL 直の経路はきちんとブロックするので 0.02 コアで済む。
 
 録画済み RAW をオフライン処理して、1 CPU 秒あたりの処理量を測った
 （ライブ計測ではビジーウェイトに埋もれて測れない）。
+計測は `scripts/offline_bench.py`。`recorder/camera.py` と同じ経路・同じパラメータを通す
+（`EventsIterator(mode="mixed", delta_t=20000, n_events=200_000)` →
+`PeriodicFrameGenerationAlgorithm(20ms, 20fps)` → `cv2.imencode(quality=75)`）。
+片方だけ変えると機体間の比較にならないので、値を動かさないこと。
+
 Intel Core Ultra 7 265K の 1 コア換算:
 
 | 処理 | Mev/CPU秒 | MB/CPU秒 |
@@ -954,17 +1032,21 @@ Pi 5 のコアが仮に 10 倍遅いとしても 55% で収まる計算になる
 
 ### 先にやるべき検証（カメラもプラグインも不要）
 
-**CPU の懸念だけなら、Pi があれば今日確かめられる。**
-録画済みの RAW ファイルを Pi にコピーし、OpenEB を arm64 でビルドして
-同じオフラインベンチを回せばいい。カメラもプラグインも要らないので、
-ソース請求より先にこれで CPU 面を潰せる。
+**arm64 ビルドは済んだ（②参照）。残るは RAW ファイルだけ。**
+録画済みの RAW を Pi にコピーして `scripts/offline_bench.py` を回せば CPU 面は決着する。
+カメラもプラグインも要らないので、ソース請求の返事を待たずに潰せる。
 
 母艦の 109 Mev/s に対して Pi が何 Mev/s 出るかが分かれば、
 「代理店の言う CPU 不足」が本当かどうかも同時に決着する。
 
 ## 未了
 
-- [ ] Raspberry Pi 検証: ①録画済み RAW でオフラインベンチ → ②プラグインソース請求 → ③aarch64 ビルド
+- [x] Raspberry Pi 検証: OpenEB + C++ ツールの aarch64 ビルド（無改造で通った。`raspberry-pi` ブランチ）
+- [ ] Raspberry Pi 検証: 母艦から RAW をコピーして `scripts/offline_bench.py` でデコード速度を実測
+- [ ] Raspberry Pi 検証: カメラを Pi に接続し `scripts/probe_silky_usb.sh` → 条件を満たせば
+      `scripts/try_psee_plugin_with_silky.sh` で「VID 追加だけで開くか」を検証（①' 参照）
+- [ ] Raspberry Pi 検証: 上が外れた場合、CenturyArks にプラグインソースを請求して aarch64 ビルド
+      （申込には製品シリアルと Metavision バージョンが要る。**5.2.0** を指定すること）
 - [ ] recorder のビジーウェイト解消（録画のみのモードで HAL 直の経路を使う）
 - [ ] 録画のスケジューリング（CSV/Web でスケジュール設定 → API を叩く）
 - [ ] `--nnfilter` が本物の動きを通すかの確認（除去率 98〜99% あるため要検証）

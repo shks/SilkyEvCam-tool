@@ -1,5 +1,5 @@
 #!/bin/bash
-# EvCam 環境設定 — 使い方: source /home/maeda/projects/EvCam/env.sh
+# EvCam 環境設定 — 使い方: リポジトリ直下で source ./env.sh
 #
 # ~/.bashrc は変更しない方針（ローカルビルドツリー方式）。
 # このスクリプトを source したシェルでのみ OpenEB + SilkyEvCam が使える。

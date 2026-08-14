@@ -1,0 +1,13 @@
+# CenturyArks SilkyEvCam (VID 31f7) を非 root で開けるようにする udev ルール。
+#
+# 内容は CenturyArks 配布のインストーラ同梱 ca_device.rules と同じ。
+# プラグイン zip は x86-64 環境でしか取得手順を通していないので、Raspberry Pi では
+# このファイルを直接入れる（README「5. udev ルール」と等価）。
+#
+# 導入（要 root）:
+#   sudo cp scripts/ca_device.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   （カメラを挿し直す）
+#
+# Prophesee EVK 用の 88-cyusb.rules（VID 04b4）は別物なので入れない。
+KERNEL=="*", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ACTION=="add", ATTR{idVendor}=="31f7", MODE="666", TAG="causb_dev"
