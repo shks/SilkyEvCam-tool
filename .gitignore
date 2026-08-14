@@ -27,3 +27,6 @@ __pycache__/
 # 録画データ（RAW は大きいので入れない）
 out/recordings/
 out/rec/
+
+# 再生時に自動生成されるシーク索引
+*.tmp_index
