@@ -157,3 +157,12 @@ python scripts/offline_bench.py samples/dense.raw  # デコード性能ベンチ
 - チャンク切替の境界で数十 ms〜数秒の録画欠落がある（ストリームは止めない）
 
 いずれも詳細と実測は [docs/tech-notes.md](docs/tech-notes.md) にある。
+
+## ライセンス
+
+[Apache License 2.0](LICENSE)。依存する [OpenEB](https://github.com/prophesee-ai/openeb) も
+Apache-2.0 で、本リポジトリが案内する OpenEB への改変も同一ライセンスの下で行える。
+
+CenturyArks 配布のプラグインバイナリ（x86-64 経路で `scripts/fetch_plugin.sh` が取得するもの）は
+**proprietary であり、本リポジトリには含まれず、このライセンスの対象外**。
+利用条件は同梱の LICENSE_CA.txt に従うこと。
