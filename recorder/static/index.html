@@ -68,6 +68,21 @@ input[type=text] {
   border: 1px solid var(--line); border-radius: 5px; padding: 9px 11px;
 }
 input[type=text]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* スケジューラの設定フォーム。操作卓の一部なので live と同じ調子で */
+.sched { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; }
+.sched label { font-size: 0.82rem; color: var(--ink-2); }
+.sched input[type=time], .sched select, .sched input[type=text], .sched input[type=number] {
+  font: inherit; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 5px; padding: 7px 10px; width: 100%;
+}
+.sched .inline { display: flex; gap: 8px; align-items: center; }
+.sched .inline input[type=time] { width: auto; }
+.schedstate { font-family: var(--mono); font-size: 0.78rem; padding: 10px 14px 0; }
+.schedstate.on { color: #7fd47f; }
+.schedstate.off { color: var(--ink-3); }
+.schedstate.warn { color: var(--warn); }
+.switch { display: flex; align-items: center; gap: 9px; font-size: 0.9rem; }
+.switch input { width: 18px; height: 18px; accent-color: var(--accent); }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px; background: var(--line); }
 .stat { background: var(--panel); padding: 11px 14px; }
 .stat .k { font-size: 0.7rem; color: var(--ink-3); }
@@ -140,6 +155,48 @@ a.dl:hover { border-color: var(--ink-3); }
           <button id="btnRec" class="rec" disabled>録画開始</button>
         </div>
         <div class="warnbar" id="disk"></div>
+      </section>
+
+      <section class="panel" style="margin-top:16px">
+        <h2>schedule</h2>
+        <div class="schedstate off" id="schedState">読込中…</div>
+        <div class="pad sched">
+          <label for="schEnabled">定期録画</label>
+          <span class="switch"><input type="checkbox" id="schEnabled"><span id="schEnabledLabel">無効</span></span>
+
+          <label for="schStart">時間帯</label>
+          <span class="inline">
+            <input type="time" id="schStart" value="08:00">
+            <span>→</span>
+            <input type="time" id="schEnd" value="18:00">
+            <span class="rmeta" title="開始と終了が同じなら 24 時間。開始 > 終了は夜跨ぎ">毎日</span>
+          </span>
+
+          <label for="schChunk">チャンク</label>
+          <select id="schChunk">
+            <option value="5">5 分</option>
+            <option value="10" selected>10 分</option>
+            <option value="20">20 分</option>
+            <option value="30">30 分</option>
+            <option value="60">60 分</option>
+          </select>
+
+          <label for="schDest">保存先</label>
+          <input type="text" id="schDest" placeholder="空欄 = out/recordings（相対パスはリポジトリ基準）"
+                 autocomplete="off" spellcheck="false">
+
+          <label for="schMinFree">空き容量の下限</label>
+          <span class="inline">
+            <input type="number" id="schMinFree" min="0" step="0.5" value="2" style="width:90px">
+            <span class="rmeta">GB を切ると新しいチャンクを開始しない</span>
+          </span>
+
+          <span></span>
+          <span class="inline">
+            <button id="btnSchedSave">設定を保存</button>
+            <span class="rmeta" id="schedSaved"></span>
+          </span>
+        </div>
       </section>
     </div>
 
@@ -405,10 +462,110 @@ $("btnDel").addEventListener("click", async () => {
   refresh();
 });
 
+// ── スケジューラ ─────────────────────────────────────────────────────
+// フォームはユーザーの編集途中を上書きしない。サーバ状態の反映は
+// 「読み込み時」と「保存直後」だけで、以降は状態行のみ更新し続ける。
+let schedLoaded = false;
+
+function schedFill(s) {
+  $("schEnabled").checked = s.enabled;
+  $("schEnabledLabel").textContent = s.enabled ? "有効" : "無効";
+  $("schStart").value = s.start;
+  $("schEnd").value = s.end;
+  // 選択式に無い値（テスト用の任意分数）は option を足して見えるようにする
+  const sel = $("schChunk");
+  if (![...sel.options].some((o) => +o.value === s.chunk_minutes)) {
+    const o = document.createElement("option");
+    o.value = s.chunk_minutes;
+    o.textContent = s.chunk_minutes + " 分";
+    sel.appendChild(o);
+  }
+  sel.value = String(s.chunk_minutes);
+  $("schDest").value = s.dest_dir || "";
+  $("schMinFree").value = s.min_free_gb;
+}
+
+function schedShowState(s) {
+  const el = $("schedState");
+  if (!s.enabled) {
+    el.className = "schedstate off";
+    el.textContent = "定期録画: 無効";
+    return;
+  }
+  if (s.last_error) {
+    el.className = "schedstate warn";
+    el.textContent = "定期録画: エラー — " + s.last_error;
+    return;
+  }
+  if (s.skipping_disk) {
+    el.className = "schedstate warn";
+    el.textContent = `定期録画: 空き容量が ${s.min_free_gb} GB を切ったため待機中`;
+    return;
+  }
+  if (s.owned_recording_id) {
+    el.className = "schedstate on";
+    const until = s.chunk_deadline ? s.chunk_deadline.slice(11, 16) : "?";
+    el.textContent = `定期録画: 録画中 ${s.owned_recording_id}（このチャンクは ${until} まで）`;
+    return;
+  }
+  el.className = "schedstate on";
+  el.textContent = s.in_window
+    ? "定期録画: 時間帯内 — 開始待ち"
+    : `定期録画: 待機中（次の時間帯 ${s.start}–${s.end}）`;
+}
+
+async function schedTick() {
+  let s;
+  try {
+    s = await (await fetch("/api/scheduler")).json();
+  } catch (e) { return; }
+  if (!schedLoaded) { schedFill(s); schedLoaded = true; }
+  schedShowState(s);
+}
+
+$("schEnabled").addEventListener("change", () => {
+  $("schEnabledLabel").textContent = $("schEnabled").checked ? "有効" : "無効";
+});
+
+$("btnSchedSave").addEventListener("click", async () => {
+  const body = {
+    enabled: $("schEnabled").checked,
+    start: $("schStart").value,
+    end: $("schEnd").value,
+    chunk_minutes: parseInt($("schChunk").value, 10),
+    dest_dir: $("schDest").value.trim(),
+    min_free_gb: parseFloat($("schMinFree").value),
+  };
+  $("btnSchedSave").disabled = true;
+  $("schedSaved").textContent = "";
+  try {
+    const r = await fetch("/api/scheduler", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      schedFill(await r.json());
+      $("schedSaved").textContent = "保存しました";
+      setTimeout(() => { $("schedSaved").textContent = ""; }, 3000);
+    } else {
+      const detail = (await r.json()).detail;
+      $("schedSaved").textContent = typeof detail === "string" ? detail : "保存できませんでした";
+    }
+  } catch (e) {
+    $("schedSaved").textContent = "サーバに接続できません";
+  } finally {
+    $("btnSchedSave").disabled = false;
+    schedTick();
+  }
+});
+
 tick();
 refresh();
+schedTick();
 setInterval(tick, 500);
 setInterval(refresh, 3000);
+setInterval(schedTick, 2000);
 </script>
 </body>
 </html>

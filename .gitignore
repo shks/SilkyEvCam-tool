@@ -30,3 +30,4 @@ out/rec/
 
 # 再生時に自動生成されるシーク索引
 *.tmp_index
+out/scheduler.json

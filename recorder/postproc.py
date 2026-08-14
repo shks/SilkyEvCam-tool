@@ -37,7 +37,14 @@ class RecordingMeta:
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=_TIMEOUT)
+    # 後処理は録画より優先度を下げる。定期録画では前チャンクの MP4 変換と
+    # 次チャンクの録画が同時に走り、4 コアの Pi では変換が全コアを食って
+    # 録画ループとスケジューラを飢えさせる（チャンク切替が 20 秒近く
+    # 遅れるのを実測した）。nice 10 + ffmpeg 2 スレッドで録画側を守る。
+    if cmd[0] == "ffmpeg":
+        cmd = cmd[:1] + ["-threads", "2"] + cmd[1:]
+    return subprocess.run(["nice", "-n", "10", *cmd],
+                          capture_output=True, text=True, timeout=_TIMEOUT)
 
 
 # metavision_file_info の human_readable_time が使う 6 単位
