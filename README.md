@@ -55,6 +55,10 @@ OpenEB を上げるときは、必ず https://centuryarks.com/download-2/ から
 
 ## セットアップ手順（実際に通したもの）
 
+以下は Ubuntu の母艦（x86-64 + CUDA + CenturyArks プラグイン）での手順。
+**Raspberry Pi / ARM 機は「Raspberry Pi で動かす（まとめ）」の手順を使うこと**
+（プラグインの入手方法が根本的に違う）。
+
 ### 1. 依存パッケージ（要 root）
 
 ```bash
@@ -922,9 +926,9 @@ x86-64 バイナリでしか配布されていない**。Prophesee も CenturyAr
 
 ```bash
 # 1. 依存（要 root）
-sudo apt-get install -y cmake libboost-all-dev libusb-1.0-0-dev \
+sudo apt-get install -y cmake git curl ffmpeg libboost-all-dev libusb-1.0-0-dev \
   libprotobuf-dev protobuf-compiler libhdf5-dev libglew-dev libglfw3-dev \
-  libopencv-dev python3-dev
+  libopencv-dev python3-dev python3-venv
 
 # 2. venv と Python 依存
 python3 -m venv .venv

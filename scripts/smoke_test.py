@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SilkyEvCam の疎通確認.
 
-`source /home/maeda/projects/EvCam/env.sh` した状態で実行する:
+リポジトリ直下で `source ./env.sh` した状態で実行する:
 
     python scripts/smoke_test.py            # ライブカメラから 3 秒キャプチャ
     python scripts/smoke_test.py --seconds 5
