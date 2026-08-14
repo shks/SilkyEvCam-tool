@@ -954,17 +954,37 @@ Pi 5 のコアが仮に 10 倍遅いとしても 55% で収まる計算になる
 
 ### 先にやるべき検証（カメラもプラグインも不要）
 
-**CPU の懸念だけなら、Pi があれば今日確かめられる。**
-録画済みの RAW ファイルを Pi にコピーし、OpenEB を arm64 でビルドして
-同じオフラインベンチを回せばいい。カメラもプラグインも要らないので、
-ソース請求より先にこれで CPU 面を潰せる。
+**CPU の懸念だけなら、Pi と OpenEB の arm64 ビルドだけで決着する。**
+このリポジトリに検証一式を同梱してある:
 
-母艦の 109 Mev/s に対して Pi が何 Mev/s 出るかが分かれば、
-「代理店の言う CPU 不足」が本当かどうかも同時に決着する。
+- `samples/dense.raw` — 密なシーン 0.5 秒（222 万イベント、4.4 Mev/s）
+- `samples/sparse.raw` — 疎なシーン 4 秒（41 万イベント、0.1 Mev/s）
+- `scripts/offline_bench.py` — 段階別の CPU コスト計測
+
+```bash
+python scripts/offline_bench.py samples/dense.raw
+python scripts/offline_bench.py samples/sparse.raw
+```
+
+母艦（Core Ultra 7 265K）の結果。**「コア使用率」は実時間でこのデータを
+流したときの 1 コア占有率**で、Pi 判定に直接使える:
+
+| 入力 | 処理 | Mev/CPU秒 | コア使用率 |
+|---|---|---|---|
+| dense (4.4 Mev/s) | デコードのみ | 159.7 | 2.8% |
+| dense | + フレーム生成 + JPEG | 97.9 | **4.5%** |
+| sparse (0.1 Mev/s) | + フレーム生成 + JPEG | 10.0 | **1.0%** |
+
+疎な入力で Mev/CPU秒 が大きく落ちるのは、フレーム生成と JPEG が
+20 fps 固定＝**実時間に比例するコスト**だから（イベント比例ではない）。
+判定にはコア使用率の方を使うこと。
+
+Pi のコアが仮に 10 倍遅くても dense で 45%。ここが 100% を超えなければ
+「代理店の言う CPU 不足」は OpenEB のコアには当てはまらないと確定する。
 
 ## 未了
 
-- [ ] Raspberry Pi 検証: ①録画済み RAW でオフラインベンチ → ②プラグインソース請求 → ③aarch64 ビルド
+- [ ] Raspberry Pi 検証: ① OpenEB を arm64 ビルドして `scripts/offline_bench.py samples/*.raw` → ②プラグインソース請求 → ③aarch64 ビルド
 - [ ] recorder のビジーウェイト解消（録画のみのモードで HAL 直の経路を使う）
 - [ ] 録画のスケジューリング（CSV/Web でスケジュール設定 → API を叩く）
 - [ ] `--nnfilter` が本物の動きを通すかの確認（除去率 98〜99% あるため要検証）
