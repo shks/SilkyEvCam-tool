@@ -954,6 +954,21 @@ python -m recorder.app --host 0.0.0.0
 
 `vendor/` と `scripts/fetch_plugin.sh`（CenturyArks バイナリの取得）は Pi では使わない。
 
+### 母艦と同じブランチで運用できる
+
+機体差が出るもの（`openeb/`・`build/`・`.venv/`・`vendor/`・OpenEB への 1 行パッチ）は
+すべて git 管理外で、コミットされているスクリプトは自動判別する
+（`build_openeb.sh` は nvcc の有無、`env.sh` は相対パス。存在しない `vendor/` の
+プラグインパスはローダーが無視する）。同じブランチを両機体で checkout し、
+それぞれでビルドすれば、母艦は CenturyArks プラグインで、Pi はパッチ経路で動く。
+
+**1 つだけ禁止事項: 同一機体で両プラグインを同居させない。**
+CenturyArks プラグインとパッチ済み Prophesee プラグインの両方が VID 31f7 を名乗ると、
+「1 つのボードは 1 つのプラグインだけが開く」という OpenEB の調停設計に反し挙動が未定義になる。
+`try_psee_plugin_with_silky.sh` は `vendor/silky-hal/` にプラグインがあると実行を拒否する。
+母艦をパッチ経路に統一したい場合は、`vendor/silky-hal` を退避して `env.sh` の
+`MV_HAL_PLUGIN_PATH` 追記行を外してから適用すること。
+
 ### 実測サマリ（母艦 = Core Ultra 7 265K + CenturyArks プラグイン経路との比較）
 
 | 項目 | 母艦 | Pi 5 (Prophesee プラグイン経路) |

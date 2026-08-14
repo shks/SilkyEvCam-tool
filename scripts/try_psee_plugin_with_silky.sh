@@ -39,6 +39,17 @@ if [ ! -f "${SRC}" ]; then
     exit 1
 fi
 
+# CenturyArks プラグインと同居させない。両方が VID 31f7 を名乗ると、
+# 「1 つのボードは 1 つのプラグインだけが開く」という OpenEB の調停設計に反し、
+# 挙動が未定義になる（tz_camera_discovery.h:46 のコメント参照）。
+if [ -f "${EVCAM_ROOT}/vendor/silky-hal/plugins/libsilky_common_plugin.so" ]; then
+    echo "ERROR: vendor/silky-hal/plugins/ に CenturyArks プラグインが存在します。" >&2
+    echo "       この機体（おそらく母艦）はそちらの経路で動いているはずです。" >&2
+    echo "       パッチ経路に切り替えたい場合は、先に vendor/silky-hal を退避し、" >&2
+    echo "       env.sh の MV_HAL_PLUGIN_PATH への追記行を外してから再実行してください。" >&2
+    exit 1
+fi
+
 if grep -q "0x31f7" "${SRC}"; then
     echo "すでにパッチ済みです:"
     grep -n "0x31f7" "${SRC}"
